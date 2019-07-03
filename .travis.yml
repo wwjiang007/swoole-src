@@ -1,4 +1,4 @@
-language: php 
+language: php
 
 compiler:
   - gcc
@@ -8,9 +8,9 @@ os:
   - linux
 
 php:
-  - 7.0
   - 7.1
   - 7.2
+  - 7.3
   - nightly
 
 matrix:
@@ -45,12 +45,17 @@ addons:
 
 # compile
 before_script:
+  - date
   - env
+  - uname -a
+  - ulimit -a
   - php -v
   - ls -al
   - pwd
-  - ./travis/compile.sh
-  - cat ~/.phpenv/versions/$(phpenv version-name)/etc/php.ini
+  - echo "`git log -20 --pretty --oneline`"
+  - echo "`git log -10 --stat --pretty --oneline`"
+  - ./travis/pecl-install.sh
+  - ./travis/simple-compile.sh
   - php --ri swoole
 
 script:

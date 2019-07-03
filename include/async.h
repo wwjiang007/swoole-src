@@ -19,9 +19,7 @@
 #ifndef _SW_ASYNC_H_
 #define _SW_ASYNC_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+SW_EXTERN_C_BEGIN
 
 #ifndef O_DIRECT
 #define O_DIRECT         040000
@@ -29,11 +27,12 @@ extern "C" {
 
 enum swAioOpcode
 {
-    SW_AIO_READ = 0,
-    SW_AIO_WRITE = 1,
-    SW_AIO_GETHOSTBYNAME = 2,
-    SW_AIO_GETADDRINFO = 3,
-    SW_AIO_STREAM_GET_LINE = 4,
+    SW_AIO_RAW,
+    SW_AIO_READ = 1,
+    SW_AIO_WRITE,
+    SW_AIO_GETHOSTBYNAME,
+    SW_AIO_GETADDRINFO,
+    SW_AIO_FGETS,
     SW_AIO_READ_FILE,
     SW_AIO_WRITE_FILE,
 };
@@ -49,6 +48,8 @@ typedef struct _swAio_event
     int fd;
     int task_id;
     uint8_t type;
+    uint8_t lock;
+    uint8_t canceled;
     uint16_t flags;
     off_t offset;
     size_t nbytes;
@@ -57,6 +58,7 @@ typedef struct _swAio_event
     int ret;
     int error;
     void *object;
+    void (*handler)(struct _swAio_event *event);
     void (*callback)(struct _swAio_event *event);
 } swAio_event;
 
@@ -65,39 +67,26 @@ typedef void (*swAio_handler)(swAio_event *event);
 typedef struct
 {
     uint8_t init;
-    uint8_t thread_num;
+    uint16_t min_thread_count;
+    uint16_t max_thread_count;
     uint32_t task_num;
-    uint16_t current_id;
     swLock lock;
-
-    swAio_handler handlers[SW_AIO_HANDLER_MAX_SIZE];
-    void (*destroy)(void);
-    void (*callback)(swAio_event *aio_event);
-    int (*read)(int fd, void *outbuf, size_t size, off_t offset);
-    int (*write)(int fd, void *inbuf, size_t size, off_t offset);
 } swAsyncIO;
 
 extern swAsyncIO SwooleAIO;
-extern swPipe swoole_aio_pipe;
 
-void swAio_callback_test(swAio_event *aio_event);
-int swAio_init(void);
-void swAio_free(void);
-int swAioBase_init(int max_aio_events);
-int swAio_dns_lookup(void *hostname, void *ip_addr, size_t size);
-int swAio_dispatch(swAio_event *_event);
+int swAio_dispatch(const swAio_event *request);
+swAio_event* swAio_dispatch2(const swAio_event *request);
+int swAio_cancel(int task_id);
 
-#ifdef HAVE_GCC_AIO
-int swAioGcc_init(int max_aio_events);
-#endif
+void swAio_handler_read(swAio_event *event);
+void swAio_handler_write(swAio_event *event);
+void swAio_handler_gethostbyname(swAio_event *event);
+void swAio_handler_getaddrinfo(swAio_event *event);
+void swAio_handler_fgets(swAio_event *event);
+void swAio_handler_read_file(swAio_event *event);
+void swAio_handler_write_file(swAio_event *event);
 
-#ifdef HAVE_LINUX_AIO
-#define SW_AIO_MIN_UNIT_SIZE     512
-int swAioLinux_init(int max_aio_events);
-#endif
-
-#ifdef __cplusplus
-}
-#endif
+SW_EXTERN_C_END
 
 #endif /* _SW_ASYNC_H_ */

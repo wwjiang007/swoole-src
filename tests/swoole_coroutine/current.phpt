@@ -4,16 +4,16 @@ swoole_coroutine: current cid
 <?php require  __DIR__ . '/../include/skipif.inc'; ?>
 --FILE--
 <?php
-require_once __DIR__ . '/../include/bootstrap.php';
-assert(Co::getuid() === -1);
+require __DIR__ . '/../include/bootstrap.php';
+Assert::eq(Co::getuid(), -1);
 go(function () {
-    assert(Co::getuid() === 1);
+    Assert::eq(Co::getuid(), 1);
     Co::sleep(1);
-    assert(Co::getuid() === 1);
+    Assert::eq(Co::getuid(), 1);
 });
 go(function () {
-    assert(Co::getuid() === 2);
+    Assert::eq(Co::getuid(), 2);
 });
-assert(Co::getuid() === -1);
+Assert::eq(Co::getuid(), -1);
 ?>
 --EXPECT--

@@ -1,18 +1,10 @@
 --TEST--
 swoole_client_coro: (length protocol) wrong packet
-
 --SKIPIF--
 <?php require  __DIR__ . '/../include/skipif.inc'; ?>
---INI--
-assert.active=1
-assert.warning=1
-assert.bail=0
-assert.quiet_eval=0
-
 --FILE--
 <?php
-require_once __DIR__ . '/../include/bootstrap.php';
-require_once __DIR__ . '/../include/api/swoole_server/TestServer.php';
+require __DIR__ . '/../include/bootstrap.php';
 
 $pm = new ProcessManager;
 $port = get_one_free_port();
@@ -31,14 +23,14 @@ $pm->parentFunc = function ($pid) use ($pm, $port)
         $data = str_repeat('A', 1025);
         $cli->send(pack('N', strlen($data)).$data);
         $retData = $cli->recv();
-        assert($retData === '');
+        Assert::eq($retData, '');
     });
     swoole_event_wait();
     $pm->kill();
 };
 
 $pm->childFunc = function () use ($pm, $port) {
-    $serv = new swoole_server("127.0.0.1", $port, SWOOLE_BASE);
+    $serv = new swoole_server('127.0.0.1', $port, SWOOLE_BASE);
     $serv->set([
         'worker_num' => 1,
         //'dispatch_mode'         => 1,

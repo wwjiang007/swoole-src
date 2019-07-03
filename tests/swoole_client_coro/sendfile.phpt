@@ -1,18 +1,10 @@
 --TEST--
 swoole_client_coro: sendfile
-
 --SKIPIF--
 <?php require  __DIR__ . '/../include/skipif.inc'; ?>
---INI--
-assert.active=1
-assert.warning=1
-assert.bail=0
-assert.quiet_eval=0
-
-
 --FILE--
 <?php
-require_once __DIR__ . '/../include/bootstrap.php';
+require __DIR__ . '/../include/bootstrap.php';
 
 $pm = new ProcessManager;
 $pm->parentFunc = function ($pid) use ($pm)
@@ -20,15 +12,15 @@ $pm->parentFunc = function ($pid) use ($pm)
     go(function ()  use ($pm) {
         $client = new Swoole\Coroutine\Client(SWOOLE_SOCK_TCP);
         $r = $client->connect(TCP_SERVER_HOST, $pm->getFreePort(), 0.5);
-        assert($r);
+        Assert::assert($r);
         $client->send(pack('N', filesize(TEST_IMAGE)));
         $ret = $client->sendfile(TEST_IMAGE);
-        assert($ret);
+        Assert::assert($ret);
 
         $data = $client->recv();
         $client->send(pack('N', 8) . 'shutdown');
         $client->close();
-        assert($data === md5_file(TEST_IMAGE));
+        Assert::eq($data, md5_file(TEST_IMAGE));
     });
     swoole_event::wait();
 };

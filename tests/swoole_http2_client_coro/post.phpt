@@ -6,7 +6,7 @@ require __DIR__ . '/../include/skipif.inc';
 ?>
 --FILE--
 <?php
-require_once __DIR__ . '/../include/bootstrap.php';
+require __DIR__ . '/../include/bootstrap.php';
 go(function () {
     $domain = 'www.zhihu.com';
     $cli = new Swoole\Coroutine\Http2\Client($domain, 443, true);
@@ -16,7 +16,7 @@ go(function () {
     ]);
     $cli->connect();
 
-    $req = new swoole_http2_request;
+    $req = new Swoole\Http2\Request;
     $req->method = 'POST';
     $req->path = '/api/v4/answers/300000000/voters';
     $req->headers = [
@@ -28,7 +28,7 @@ go(function () {
     $req->data = '{"type":"up"}';
     $cli->send($req);
     $response = $cli->recv();
-    assert(json_decode($response->data)->error->code === 602);
+    Assert::eq(json_decode($response->data)->error->code, 602);
 });
 ?>
 --EXPECT--
