@@ -93,15 +93,15 @@ enum sw_mysql_command_flag
 
 enum sw_mysql_state
 {
-    SW_MYSQL_STATE_IDLE                 = 0,
-    SW_MYSQL_STATE_QUERY                = 1 | SW_MYSQL_COMMAND_FLAG_QUERY,
-    SW_MYSQL_STATE_QUERY_FETCH          = 2 | SW_MYSQL_COMMAND_FLAG_QUERY,
-    SW_MYSQL_STATE_QUERY_MORE_RESULTS   = 3 | SW_MYSQL_COMMAND_FLAG_QUERY,
-    SW_MYSQL_STATE_PREPARE              = 4 | SW_MYSQL_COMMAND_FLAG_QUERY,
-    SW_MYSQL_STATE_EXECUTE              = 5 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
-    SW_MYSQL_STATE_EXECUTE_FETCH        = 6 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
-    SW_MYSQL_STATE_EXECUTE_MORE_RESULTS = 7 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
-    SW_MYSQL_STATE_CLOSED               = 8 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
+    SW_MYSQL_STATE_CLOSED               = 0,
+    SW_MYSQL_STATE_IDLE                 = 1,
+    SW_MYSQL_STATE_QUERY                = 2 | SW_MYSQL_COMMAND_FLAG_QUERY,
+    SW_MYSQL_STATE_QUERY_FETCH          = 3 | SW_MYSQL_COMMAND_FLAG_QUERY,
+    SW_MYSQL_STATE_QUERY_MORE_RESULTS   = 4 | SW_MYSQL_COMMAND_FLAG_QUERY,
+    SW_MYSQL_STATE_PREPARE              = 5 | SW_MYSQL_COMMAND_FLAG_QUERY,
+    SW_MYSQL_STATE_EXECUTE              = 6 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
+    SW_MYSQL_STATE_EXECUTE_FETCH        = 7 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
+    SW_MYSQL_STATE_EXECUTE_MORE_RESULTS = 8 | SW_MYSQL_COMMAND_FLAG_EXECUTE,
 };
 
 enum sw_mysql_packet_types
@@ -446,7 +446,7 @@ public:
     }
     static inline uint8_t parse_type(const char *data)
     {
-        if (unlikely(!data))
+        if (sw_unlikely(!data))
         {
             return SW_MYSQL_PACKET_NULL;
         }
@@ -754,7 +754,7 @@ public:
     }
     inline const char* read(size_t length)
     {
-        if (likely(read_ptr + length <= packet_eof))
+        if (sw_likely(read_ptr + length <= packet_eof))
         {
             const char *p = read_ptr;
             read_ptr += length;
@@ -766,7 +766,7 @@ public:
     {
         uint32_t readable_length = packet_eof - read_ptr;
         uint32_t read_bytes = SW_MIN(readable_length, size);
-        if (likely(read_bytes > 0))
+        if (sw_likely(read_bytes > 0))
         {
             memcpy(buf, read_ptr, read_bytes);
             read_ptr += read_bytes;
@@ -887,7 +887,7 @@ public:
     inline void alloc_fields(uint32_t length)
     {
         clear_fields();
-        if (likely(length != 0))
+        if (sw_likely(length != 0))
         {
             fields.info = new field_packet[length];
             fields.length = length;

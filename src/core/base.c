@@ -14,7 +14,7 @@
  +----------------------------------------------------------------------+
  */
 
-#include "swoole.h"
+#include "swoole_api.h"
 #include "atomic.h"
 #include "async.h"
 #include "coroutine_c_api.h"
@@ -32,7 +32,16 @@
 swGlobal_t SwooleG;
 swWorkerGlobal_t SwooleWG;
 __thread swThreadGlobal_t SwooleTG;
+
+#ifdef __MACH__
+static __thread char _sw_error_buf[SW_ERROR_MSG_SIZE];
+char* sw_error_()
+{
+    return _sw_error_buf;
+}
+#else
 __thread char sw_error[SW_ERROR_MSG_SIZE];
+#endif
 
 static void swoole_fatal_error(int code, const char *format, ...);
 
@@ -138,7 +147,7 @@ void swoole_clean(void)
         }
         if (SwooleG.main_reactor)
         {
-            SwooleG.main_reactor->free(SwooleG.main_reactor);
+            swoole_event_free();
         }
         SwooleG.memory_pool->destroy(SwooleG.memory_pool);
         bzero(&SwooleG, sizeof(SwooleG));
@@ -171,7 +180,6 @@ pid_t swoole_fork(int flags)
         {
             swTimer_free(&SwooleG.timer);
         }
-
         if (!(flags & SW_FORK_EXEC))
         {
             /**
@@ -187,6 +195,14 @@ pid_t swoole_fork(int flags)
              * reopen log file
              */
             swLog_reopen(0);
+            /**
+             * reset eventLoop
+             */
+            if (SwooleG.main_reactor)
+            {
+                swoole_event_free();
+                swTraceLog(SW_TRACE_REACTOR, "reactor has been destroyed");
+            }
         }
         else
         {
@@ -194,15 +210,6 @@ pid_t swoole_fork(int flags)
              * close log fd
              */
             swLog_free();
-        }
-        /**
-         * reset eventLoop
-         */
-        if (SwooleG.main_reactor)
-        {
-            SwooleG.main_reactor->free(SwooleG.main_reactor);
-            SwooleG.main_reactor = NULL;
-            swTraceLog(SW_TRACE_REACTOR, "reactor has been destroyed");
         }
         /**
          * reset signal handler
@@ -821,23 +828,18 @@ uint32_t swoole_common_multiple(uint32_t u, uint32_t v)
     return u * v / n_cup;
 }
 
-/**
- * for GDB
- */
-void swBreakPoint() { }
-
 size_t sw_snprintf(char *buf, size_t size, const char *format, ...)
 {
     va_list args;
     va_start(args, format);
     int retval = vsnprintf(buf, size, format, args);
     va_end(args);
-    if (unlikely(retval < 0))
+    if (sw_unlikely(retval < 0))
     {
         retval = 0;
         buf[0] = '\0';
     }
-    else if (unlikely(retval >= size))
+    else if (sw_unlikely(retval >= size))
     {
         retval = size - 1;
         buf[retval] = '\0';
@@ -848,12 +850,12 @@ size_t sw_snprintf(char *buf, size_t size, const char *format, ...)
 size_t sw_vsnprintf(char *buf, size_t size, const char *format, va_list args)
 {
     int retval = vsnprintf(buf, size, format, args);
-    if (unlikely(retval < 0))
+    if (sw_unlikely(retval < 0))
     {
         retval = 0;
         buf[0] = '\0';
     }
-    else if (unlikely(retval >= size))
+    else if (sw_unlikely(retval >= size))
     {
         retval = size - 1;
         buf[retval] = '\0';
@@ -861,7 +863,7 @@ size_t sw_vsnprintf(char *buf, size_t size, const char *format, va_list args)
     return retval;
 }
 
-void swoole_ioctl_set_block(int sock, int nonblock)
+int swoole_ioctl_set_block(int sock, int nonblock)
 {
     int ret;
     do
@@ -873,10 +875,15 @@ void swoole_ioctl_set_block(int sock, int nonblock)
     if (ret < 0)
     {
         swSysWarn("ioctl(%d, FIONBIO, %d) failed", sock, nonblock);
+        return SW_ERR;
+    }
+    else
+    {
+        return SW_OK;
     }
 }
 
-void swoole_fcntl_set_option(int sock, int nonblock, int cloexec)
+int swoole_fcntl_set_option(int sock, int nonblock, int cloexec)
 {
     int opts, ret;
 
@@ -911,6 +918,7 @@ void swoole_fcntl_set_option(int sock, int nonblock, int cloexec)
         if (ret < 0)
         {
             swSysWarn("fcntl(%d, SETFL, opts) failed", sock);
+            return SW_ERR;
         }
     }
 
@@ -946,9 +954,11 @@ void swoole_fcntl_set_option(int sock, int nonblock, int cloexec)
         if (ret < 0)
         {
             swSysWarn("fcntl(%d, SETFD, opts) failed", sock);
+            return SW_ERR;
         }
     }
 #endif
+    return SW_OK;
 }
 
 static int *swoole_kmp_borders(char *needle, size_t nlen)

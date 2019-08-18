@@ -49,6 +49,14 @@ typedef enum
 typedef void (*sw_coro_on_swap_t)(void*);
 typedef void (*sw_coro_bailout_t)();
 
+#ifdef SW_CO_MT
+#define sw_co_thread_local   thread_local
+#define sw_timer()           &SwooleTG.timer
+#else
+#define sw_co_thread_local
+#define sw_timer()           &SwooleG.timer
+#endif
+
 namespace swoole
 {
 struct socket_poll_fd
@@ -91,7 +99,7 @@ public:
 
     inline long get_origin_cid()
     {
-        return likely(origin) ? origin->get_cid() : -1;
+        return sw_likely(origin) ? origin->get_cid() : -1;
     }
 
     inline void* get_task()
@@ -109,7 +117,7 @@ public:
         task = _task;
     }
 
-    static std::unordered_map<long, Coroutine*> coroutines;
+    static sw_co_thread_local std::unordered_map<long, Coroutine*> coroutines;
 
     static void set_on_yield(sw_coro_on_swap_t func);
     static void set_on_resume(sw_coro_on_swap_t func);
@@ -128,7 +136,7 @@ public:
 
     static inline Coroutine* get_current_safe()
     {
-        if (unlikely(!current))
+        if (sw_unlikely(!current))
         {
             swFatalError(SW_ERROR_CO_OUT_OF_COROUTINE, "API must be called in the coroutine");
         }
@@ -137,24 +145,24 @@ public:
 
     static inline void* get_current_task()
     {
-        return likely(current) ? current->get_task() : nullptr;
+        return sw_likely(current) ? current->get_task() : nullptr;
     }
 
     static inline long get_current_cid()
     {
-        return likely(current) ? current->get_cid() : -1;
+        return sw_likely(current) ? current->get_cid() : -1;
     }
 
     static inline Coroutine* get_by_cid(long cid)
     {
         auto i = coroutines.find(cid);
-        return likely(i != coroutines.end()) ? i->second : nullptr;
+        return sw_likely(i != coroutines.end()) ? i->second : nullptr;
     }
 
     static inline void* get_task_by_cid(long cid)
     {
         Coroutine *co = get_by_cid(cid);
-        return likely(co) ? co->get_task() : nullptr;
+        return sw_likely(co) ? co->get_task() : nullptr;
     }
 
     static inline size_t get_stack_size()
@@ -185,10 +193,10 @@ public:
     static void print_list();
 
 protected:
+    static sw_co_thread_local Coroutine* current;
+    static sw_co_thread_local long last_cid;
+    static sw_co_thread_local uint64_t peak_num;
     static size_t stack_size;
-    static Coroutine* current;
-    static long last_cid;
-    static uint64_t peak_num;
     static sw_coro_on_swap_t on_yield;   /* before yield */
     static sw_coro_on_swap_t on_resume;  /* before resume */
     static sw_coro_on_swap_t on_close;   /* before close */
@@ -205,7 +213,7 @@ protected:
     {
         cid = ++last_cid;
         coroutines[cid] = this;
-        if (unlikely(count() > peak_num))
+        if (sw_unlikely(count() > peak_num))
         {
             peak_num = count();
         }
@@ -227,7 +235,7 @@ protected:
         {
             close();
         }
-        else if (unlikely(on_bailout))
+        else if (sw_unlikely(on_bailout))
         {
             SW_ASSERT(current == nullptr);
             on_bailout();

@@ -99,7 +99,7 @@ static void sleep_timeout(swTimer *timer, swTimer_node *tnode)
 int System::sleep(double sec)
 {
     Coroutine* co = Coroutine::get_current_safe();
-    if (swTimer_add(&SwooleG.timer, (long) (sec * 1000), 0, co, sleep_timeout) == NULL)
+    if (swTimer_add(sw_timer(), (long) (sec * 1000), 0, co, sleep_timeout) == NULL)
     {
         return -1;
     }
@@ -230,17 +230,27 @@ string System::gethostbyname(const string &hostname, int domain, double timeout)
     ev.object = (void*) &task;
     ev.handler = swAio_handler_gethostbyname;
     ev.callback = aio_onDNSCompleted;
+    /* TODO: find a better way */
+    ev.ret = 1;
 
     swAio_event *event = swAio_dispatch2(&ev);
     swTimer_node *timer = nullptr;
     if (timeout > 0)
     {
-        timer = swTimer_add(&SwooleG.timer, (long) (timeout * 1000), 0, event, aio_onDNSTimeout);
+        timer = swTimer_add(sw_timer(), (long) (timeout * 1000), 0, event, aio_onDNSTimeout);
     }
     task.co->yield();
+    if (ev.ret == 1)
+    {
+        /* TODO: find a better way */
+        /* canceled */
+        event->canceled = 1;
+        ev.ret = -1;
+        ev.error = SW_ERROR_DNSLOOKUP_RESOLVE_FAILED;
+    }
     if (timer)
     {
-        swTimer_del(&SwooleG.timer, timer);
+        swTimer_del(sw_timer(), timer);
     }
 
     if (ev.ret == -1)
@@ -300,12 +310,12 @@ vector<string> System::getaddrinfo(const string &hostname, int family, int sockt
     swTimer_node *timer = nullptr;
     if (timeout > 0)
     {
-        timer = swTimer_add(&SwooleG.timer, (long) (timeout * 1000), 0, event, aio_onDNSTimeout);
+        timer = swTimer_add(sw_timer(), (long) (timeout * 1000), 0, event, aio_onDNSTimeout);
     }
     task.co->yield();
     if (timer)
     {
-        swTimer_del(&SwooleG.timer, timer);
+        swTimer_del(sw_timer(), timer);
     }
 
     vector<string> retval;
@@ -417,7 +427,7 @@ static inline void socket_poll_trigger_event(swReactor *reactor, int fd, enum sw
         task->success = true;
         if (task->timer)
         {
-            swTimer_del(&SwooleG.timer, task->timer);
+            swTimer_del(sw_timer(), task->timer);
             task->timer = nullptr;
         }
         reactor->defer(reactor, socket_poll_completed, task);
@@ -445,7 +455,7 @@ static int socket_poll_error_callback(swReactor *reactor, swEvent *event)
 bool System::socket_poll(std::unordered_map<int, socket_poll_fd> &fds, double timeout)
 {
     swReactor *reactor = SwooleG.main_reactor;
-    if (unlikely(!swReactor_isset_handler(reactor, SW_FD_CORO_POLL)))
+    if (sw_unlikely(!swReactor_isset_handler(reactor, SW_FD_CORO_POLL)))
     {
         swReactor_set_handler(reactor, SW_FD_CORO_POLL | SW_EVENT_READ, socket_poll_read_callback);
         swReactor_set_handler(reactor, SW_FD_CORO_POLL | SW_EVENT_WRITE, socket_poll_write_callback);
@@ -458,7 +468,7 @@ bool System::socket_poll(std::unordered_map<int, socket_poll_fd> &fds, double ti
         if (!event_list)
         {
             swWarn("malloc[1] failed");
-            return SW_ERR;
+            return false;
         }
         int j = 0;
         for (auto i = fds.begin(); i != fds.end(); i++)
@@ -514,14 +524,14 @@ bool System::socket_poll(std::unordered_map<int, socket_poll_fd> &fds, double ti
         }
     }
 
-    if (unlikely(tasked_num == 0))
+    if (sw_unlikely(tasked_num == 0))
     {
         return false;
     }
 
     if (timeout > 0)
     {
-        task.timer = swTimer_add(&SwooleG.timer, (long) (timeout * 1000), 0, &task, socket_poll_timeout);
+        task.timer = swTimer_add(sw_timer(), (long) (timeout * 1000), 0, &task, socket_poll_timeout);
     }
 
     task.co->yield();

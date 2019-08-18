@@ -16,7 +16,7 @@
   +----------------------------------------------------------------------+
  */
 
-#include "swoole_coroutine_scheduler.h"
+#include "php_swoole_cxx.h"
 #include "coroutine_c_api.h"
 
 #include <queue>
@@ -108,7 +108,7 @@ static const zend_function_entry swoole_coroutine_scheduler_methods[] =
     PHP_FE_END
 };
 
-void swoole_coroutine_scheduler_init(int module_number)
+void php_swoole_coroutine_scheduler_minit(int module_number)
 {
     SW_INIT_CLASS_ENTRY(swoole_coroutine_scheduler, "Swoole\\Coroutine\\Scheduler", NULL, "Co\\Scheduler", swoole_coroutine_scheduler_methods);
     SW_SET_CLASS_SERIALIZABLE(swoole_coroutine_scheduler, zend_class_serialize_deny, zend_class_unserialize_deny);
@@ -137,12 +137,9 @@ PHP_METHOD(swoole_coroutine_scheduler, set)
         zend_long max_num = zval_get_long(ztmp);
         PHPCoroutine::set_max_num(max_num <= 0 ? SW_DEFAULT_MAX_CORO_NUM : max_num);
     }
-    /**
-     * Runtime: hook php function
-     */
     if (php_swoole_array_get_value(vht, "hook_flags", ztmp))
     {
-        PHPCoroutine::enable_hook(zval_get_long(ztmp));
+        PHPCoroutine::config.hook_flags = zval_get_long(ztmp);
     }
     if (php_swoole_array_get_value(vht, "c_stack_size", ztmp) || php_swoole_array_get_value(vht, "stack_size", ztmp))
     {
@@ -184,6 +181,14 @@ PHP_METHOD(swoole_coroutine_scheduler, set)
     if (php_swoole_array_get_value(vht, "dns_cache_capacity", ztmp))
     {
         System::set_dns_cache_capacity((size_t) zval_get_long(ztmp));
+    }
+    if (php_swoole_array_get_value(vht, "dns_server", ztmp))
+    {
+        if (SwooleG.dns_server_v4)
+        {
+            sw_free(SwooleG.dns_server_v4);
+        }
+        SwooleG.dns_server_v4 = zend::string(ztmp).dup();
     }
     if (php_swoole_array_get_value(vht, "display_errors", ztmp))
     {
@@ -258,7 +263,11 @@ static PHP_METHOD(swoole_coroutine_scheduler, start)
         php_swoole_fatal_error(E_WARNING, "scheduler is started, unable to execute %s->start", SW_Z_OBJCE_NAME_VAL_P(ZEND_THIS));
         RETURN_FALSE;
     }
-    php_swoole_reactor_init();
+    if (php_swoole_reactor_init() < 0)
+    {
+        RETURN_FALSE;
+    }
+
     s->started = true;
 
     if (!s->list)

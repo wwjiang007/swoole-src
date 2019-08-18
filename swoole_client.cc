@@ -258,7 +258,7 @@ static unordered_map<string, queue<swClient *> *> long_connections;
 zend_class_entry *swoole_client_ce;
 static zend_object_handlers swoole_client_handlers;
 
-void swoole_client_init(int module_number)
+void php_swoole_client_minit(int module_number)
 {
     SW_INIT_CLASS_ENTRY(swoole_client, "Swoole\\Client", "swoole_client", NULL, swoole_client_methods);
     SW_SET_CLASS_SERIALIZABLE(swoole_client, zend_class_serialize_deny, zend_class_unserialize_deny);
@@ -1037,9 +1037,11 @@ static PHP_METHOD(swoole_client, connect)
     }
     swoole_set_object(ZEND_THIS, cli);
 
+    bool is_async = cli->async;
+
     if (cli->type == SW_SOCK_TCP || cli->type == SW_SOCK_TCP6)
     {
-        if (cli->async == 1)
+        if (is_async == 1)
         {
             //for tcp: nonblock
             //for udp: have udp connect
@@ -1065,7 +1067,7 @@ static PHP_METHOD(swoole_client, connect)
     }
 
     //nonblock async
-    if (cli->async)
+    if (is_async)
     {
         client_callback *cb = (client_callback *) swoole_get_property(ZEND_THIS, 0);
         if (!cb)
@@ -1140,7 +1142,8 @@ static PHP_METHOD(swoole_client, connect)
         {
             if (SwooleG.error == SW_ERROR_DNSLOOKUP_RESOLVE_FAILED)
             {
-                php_swoole_error(E_WARNING, "connect to server[%s:%d] failed. Error: %s[%d]", host, (int) port, hstrerror(h_errno), h_errno);
+                php_swoole_error(E_WARNING, "connect to server[%s:%d] failed. Error: %s[%d]", host, (int ) port,
+                        swoole_strerror(SwooleG.error), SwooleG.error);
             }
             zend_update_property_long(swoole_client_ce, ZEND_THIS, ZEND_STRL("errCode"), SwooleG.error);
         }
@@ -1149,12 +1152,16 @@ static PHP_METHOD(swoole_client, connect)
             php_swoole_sys_error(E_WARNING, "connect to server[%s:%d] failed", host, (int )port);
             zend_update_property_long(swoole_client_ce, ZEND_THIS, ZEND_STRL("errCode"), errno);
         }
-        if (cli->async && cli->onError == NULL)
+        if (is_async)
         {
-            php_swoole_client_free(ZEND_THIS, cli);
-            zval_ptr_dtor(ZEND_THIS);
+            swClient *cli = (swClient *) swoole_get_object(ZEND_THIS);
+            if (cli && cli->onError == NULL)
+            {
+                php_swoole_client_free(ZEND_THIS, cli);
+                zval_ptr_dtor(ZEND_THIS);
+            }
         }
-        if (!cli->async)
+        else
         {
             php_swoole_client_free(ZEND_THIS, cli);
         }
@@ -1683,7 +1690,7 @@ static PHP_METHOD(swoole_client, close)
     if (force || !cli->keep || swConnection_error(SwooleG.error) == SW_CLOSE)
     {
         uint8_t need_free = !cli->async;
-        if (unlikely(SWOOLE_G(req_status) != PHP_SWOOLE_CALL_USER_SHUTDOWNFUNC_BEGIN))
+        if (sw_unlikely(SWOOLE_G(req_status) != PHP_SWOOLE_CALL_USER_SHUTDOWNFUNC_BEGIN))
         {
             ret = cli->close(cli);
         }
@@ -2012,7 +2019,7 @@ PHP_FUNCTION(swoole_client_select)
         RETURN_FALSE;
     }
 
-    retval = poll(fds, maxevents, (int) timeout * 1000);
+    retval = poll(fds, maxevents, (int) (timeout * 1000));
     if (retval == -1)
     {
         efree(fds);

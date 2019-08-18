@@ -1,7 +1,7 @@
 PROJECT(libswoole)
 
 ENABLE_LANGUAGE(ASM)
-SET(SWOOLE_VERSION 4.4.0-alpha)
+SET(SWOOLE_VERSION 4.4.4)
 SET(SWOOLE_CLFLAGS pthread rt dl ssl crypt crypto)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
@@ -9,7 +9,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
 SET(CMAKE_BUILD_TYPE Debug)
 
-file(GLOB_RECURSE SRC_LIST FOLLOW_SYMLINKS src/*.c src/*.cc thirdparty/boost/asm/jump_x86_64_sysv_elf_gas.S thirdparty/boost/asm/make_x86_64_sysv_elf_gas.S)
+file(GLOB_RECURSE SRC_LIST FOLLOW_SYMLINKS src/*.c src/*.cc thirdparty/boost/asm/combined.S)
 file(GLOB_RECURSE HEAD_FILES FOLLOW_SYMLINKS include/*.h)
 file(GLOB_RECURSE HEAD_WAPPER_FILES FOLLOW_SYMLINKS include/wrapper/*.hpp)
 
@@ -19,9 +19,10 @@ SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 #message(STATUS "source=${SRC_LIST}")
 #message(STATUS "header=${HEAD_FILES}")
 
+add_definitions(-DSW_CO_MT)
 add_definitions(-DHAVE_CONFIG_H)
 
-INCLUDE_DIRECTORIES(BEFORE ./include ./include/wrapper ./ /usr/local/php/include /usr/local/php/include/Zend /usr/local/php/include/main)
+INCLUDE_DIRECTORIES(BEFORE ./include ./include/wrapper ./)
 SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
 #shared library
@@ -37,10 +38,16 @@ target_link_libraries(shared ${SWOOLE_CLFLAGS})
 LINK_DIRECTORIES(${LIBRARY_OUTPUT_PATH})
 
 #test_server
-set(TEST_SRC_LIST examples/test_server.c)
+set(TEST_SRC_LIST examples/cpp/test_server.c)
 add_executable(test_server ${TEST_SRC_LIST})
 add_dependencies(test_server shared)
 target_link_libraries(test_server ${SWOOLE_CLFLAGS} swoole)
+
+#mt_co
+set(TEST_SRC_LIST examples/cpp/mt_co.cc)
+add_executable(mt_co ${TEST_SRC_LIST})
+add_dependencies(mt_co shared)
+target_link_libraries(mt_co ${SWOOLE_CLFLAGS} swoole)
 
 #install
 INSTALL(CODE "MESSAGE(\"Are you run command using root user?\")")

@@ -167,7 +167,7 @@ function httpRequest(string $uri, array $options = [])
     $redirect_times = $options['redirect'] ?? 3;
     while (true) {
         $cli->execute($path . $query);
-        if ($redirect_times-- && ($cli->headers['location'] ?? null) && $cli->headers['location']{0} === '/') {
+        if ($redirect_times-- && ($cli->headers['location'] ?? null) && $cli->headers['location'][0] === '/') {
             $path = $cli->headers['location'];
             $query = '';
             continue;
@@ -224,7 +224,7 @@ function tcp_type_length(string $type = 'n'): int
     } else {
         $len = 0;
         for ($n = 0; $n < strlen($type); $n++) {
-            $len += $map[$type{$n}] ?? 0;
+            $len += $map[$type[$n]] ?? 0;
         }
         return $len;
     }
@@ -332,7 +332,7 @@ function makeTcpClient_without_protocol($host, $port, callable $onConnect = null
 function opcode_encode($op, $data)
 {
     $r = json_encode([$op, $data]);
-    Assert::eq(json_last_error(), JSON_ERROR_NONE);
+    Assert::same(json_last_error(), JSON_ERROR_NONE);
     return pack("N", strlen($r) + 4) . $r;
 }
 
@@ -340,7 +340,7 @@ function opcode_decode($raw)
 {
     $json = substr($raw, 4);
     $r = json_decode($json, true);
-    Assert::eq(json_last_error(), JSON_ERROR_NONE);
+    Assert::same(json_last_error(), JSON_ERROR_NONE);
     assert(is_array($r) && count($r) === 2);
     return $r;
 }

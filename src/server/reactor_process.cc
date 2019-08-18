@@ -14,6 +14,7 @@
  +----------------------------------------------------------------------+
  */
 
+#include "swoole_api.h"
 #include "server.h"
 
 static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker);
@@ -301,33 +302,20 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
 
     swServer_worker_init(serv, worker);
 
+    //create reactor
+    if (!SwooleG.main_reactor)
+    {
+        if (swoole_event_init() < 0)
+        {
+            return SW_ERR;
+        }
+    }
+    swReactor *reactor = SwooleG.main_reactor;
+
     int n_buffer = serv->worker_num + serv->task_worker_num + serv->user_worker_num;
     if (swReactorProcess_alloc_output_buffer(n_buffer))
     {
         return SW_ERR;
-    }
-
-    //create reactor
-    swReactor *reactor;
-    if (!SwooleG.main_reactor)
-    {
-        reactor = (swReactor *) sw_malloc(sizeof(swReactor));
-        if (!reactor)
-        {
-            swWarn("malloc(%ld) failed", sizeof(swReactor));
-            return SW_ERR;
-        }
-        if (swReactor_create(reactor, SW_REACTOR_MAXEVENTS) < 0)
-        {
-            swReactor_free_output_buffer(n_buffer);
-            sw_free(reactor);
-            return SW_ERR;
-        }
-        SwooleG.main_reactor = reactor;
-    }
-    else
-    {
-        reactor = SwooleG.main_reactor;
     }
 
     swListenPort *ls;
@@ -341,7 +329,8 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
         {
             if (swReactorProcess_reuse_port(ls) < 0)
             {
-                swReactor_free_output_buffer(n_buffer);
+                _fail: swReactor_free_output_buffer(n_buffer);
+                swoole_event_free();
                 return SW_ERR;
             }
         }
@@ -380,8 +369,8 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
 
     if (worker->pipe_worker)
     {
-        swSetNonBlock(worker->pipe_worker);
-        swSetNonBlock(worker->pipe_master);
+        swSocket_set_nonblock(worker->pipe_worker);
+        swSocket_set_nonblock(worker->pipe_master);
         reactor->add(reactor, worker->pipe_worker, SW_FD_PIPE);
         reactor->add(reactor, worker->pipe_master, SW_FD_PIPE);
     }
@@ -402,7 +391,7 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
                 pfd = p->getFd(p, 1);
                 psock = swReactor_get(reactor, pfd);
                 psock->fdtype = SW_FD_PIPE;
-                swSetNonBlock(pfd);
+                swSocket_set_nonblock(pfd);
             }
         }
     }
@@ -424,8 +413,7 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
      */
     if ((serv->master_timer = swTimer_add(&SwooleG.timer, 1000, 1, serv, swServer_master_onTimer)) == NULL)
     {
-        swReactor_free_output_buffer(n_buffer);
-        return SW_ERR;
+        goto _fail;
     }
 
     swWorker_onStart(serv);
@@ -438,11 +426,27 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
         serv->heartbeat_timer = swTimer_add(&SwooleG.timer, (long) (serv->heartbeat_check_interval * 1000), 1, reactor, swReactorProcess_onTimeout);
         if (serv->heartbeat_timer == NULL)
         {
-            return SW_ERR;
+            goto _fail;
         }
     }
 
     int retval = reactor->wait(reactor, NULL);
+
+    /**
+     * Close all connections
+     */
+    int fd;
+    int serv_max_fd = swServer_get_maxfd(serv);
+    int serv_min_fd = swServer_get_minfd(serv);
+
+    for (fd = serv_min_fd; fd <= serv_max_fd; fd++)
+    {
+        swConnection *conn = swServer_connection_get(serv, fd);
+        if (conn != NULL && conn->active && conn->fdtype == SW_FD_TCP)
+        {
+            serv->close(serv, conn->session_id, 1);
+        }
+    }
 
     /**
      * call internal serv hooks
@@ -455,9 +459,7 @@ static int swReactorProcess_loop(swProcessPool *pool, swWorker *worker)
         swServer_call_hook(serv, SW_SERVER_HOOK_WORKER_CLOSE, hook_args);
     }
 
-    swReactor_destory(reactor);
-    SwooleG.main_reactor = nullptr;
-    sw_free(reactor);
+    swoole_event_free();
 
     if (serv->onWorkerStop)
     {
@@ -641,7 +643,7 @@ static int swReactorProcess_reuse_port(swListenPort *ls)
     //stream socket, set nonblock
     if (swSocket_is_stream(ls->type))
     {
-        swSetNonBlock(sock);
+        swSocket_set_nonblock(sock);
     }
     ls->sock = sock;
     return swPort_listen(ls);

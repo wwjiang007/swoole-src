@@ -19,22 +19,22 @@
 
 using namespace swoole;
 
+sw_co_thread_local Coroutine* Coroutine::current = nullptr;
+sw_co_thread_local long Coroutine::last_cid = 0;
+sw_co_thread_local std::unordered_map<long, Coroutine*> Coroutine::coroutines;
+sw_co_thread_local uint64_t Coroutine::peak_num = 0;
+
 size_t Coroutine::stack_size = SW_DEFAULT_C_STACK_SIZE;
-Coroutine* Coroutine::current = nullptr;
-long Coroutine::last_cid = 0;
-uint64_t Coroutine::peak_num = 0;
 sw_coro_on_swap_t Coroutine::on_yield = nullptr;
 sw_coro_on_swap_t Coroutine::on_resume = nullptr;
 sw_coro_on_swap_t Coroutine::on_close = nullptr;
 sw_coro_bailout_t Coroutine::on_bailout = nullptr;
 
-std::unordered_map<long, Coroutine*> Coroutine::coroutines;
-
 void Coroutine::yield()
 {
     SW_ASSERT(current == this || on_bailout != nullptr);
     state = SW_CORO_WAITING;
-    if (likely(on_yield))
+    if (sw_likely(on_yield))
     {
         on_yield(task);
     }
@@ -45,12 +45,12 @@ void Coroutine::yield()
 void Coroutine::resume()
 {
     SW_ASSERT(current != this);
-    if (unlikely(on_bailout))
+    if (sw_unlikely(on_bailout))
     {
         return;
     }
     state = SW_CORO_RUNNING;
-    if (likely(on_resume))
+    if (sw_likely(on_resume))
     {
         on_resume(task);
     }
@@ -71,7 +71,7 @@ void Coroutine::yield_naked()
 void Coroutine::resume_naked()
 {
     SW_ASSERT(current != this);
-    if (unlikely(on_bailout))
+    if (sw_unlikely(on_bailout))
     {
         return;
     }

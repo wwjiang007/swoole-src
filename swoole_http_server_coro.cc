@@ -29,6 +29,14 @@ using swoole::coroutine::System;
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_void, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_http_server_coro_construct, 0, 0, 1)
+    ZEND_ARG_INFO(0, host)
+    ZEND_ARG_INFO(0, port)
+    ZEND_ARG_INFO(0, ssl)
+    ZEND_ARG_INFO(0, reuse_port)
+ZEND_END_ARG_INFO()
+
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_http_server_coro_handle, 0, 0, 2)
     ZEND_ARG_INFO(0, pattern)
     ZEND_ARG_CALLABLE_INFO(0, callback, 0)
@@ -139,7 +147,7 @@ static PHP_METHOD(swoole_http_server_coro, __destruct);
 
 static const zend_function_entry swoole_http_server_coro_methods[] =
 {
-    PHP_ME(swoole_http_server_coro, __construct, arginfo_swoole_void, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_http_server_coro, __construct, arginfo_swoole_http_server_coro_construct, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_http_server_coro, __destruct, arginfo_swoole_void, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_http_server_coro, set, arginfo_swoole_http_server_coro_set, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_http_server_coro, handle, arginfo_swoole_http_server_coro_handle, ZEND_ACC_PUBLIC)
@@ -213,7 +221,7 @@ static void swoole_http_server_coro_free_object(zend_object *object)
     zend_object_std_dtor(&hsc->std);
 }
 
-void swoole_http_server_coro_init(int module_number)
+void php_swoole_http_server_coro_minit(int module_number)
 {
     SW_INIT_CLASS_ENTRY(swoole_http_server_coro, "Swoole\\Coroutine\\Http\\Server", NULL, "Co\\Http\\Server", swoole_http_server_coro_methods);
     SW_SET_CLASS_SERIALIZABLE(swoole_http_server_coro, zend_class_serialize_deny, zend_class_unserialize_deny);
@@ -232,19 +240,20 @@ void swoole_http_server_coro_init(int module_number)
     zend_declare_property_string(swoole_http_server_coro_ce, ZEND_STRL("errMsg"), "", ZEND_ACC_PUBLIC);
 }
 
-
 static PHP_METHOD(swoole_http_server_coro, __construct)
 {
     char *host;
     size_t l_host;
     zend_long port = 0;
     zend_bool ssl = 0;
+    zend_bool reuse_port = 0;
 
-    ZEND_PARSE_PARAMETERS_START_EX(ZEND_PARSE_PARAMS_THROW, 1, 3)
+    ZEND_PARSE_PARAMETERS_START_EX(ZEND_PARSE_PARAMS_THROW, 1, 4)
         Z_PARAM_STRING(host, l_host)
         Z_PARAM_OPTIONAL
         Z_PARAM_LONG(port)
         Z_PARAM_BOOL(ssl)
+        Z_PARAM_BOOL(reuse_port)
     ZEND_PARSE_PARAMETERS_END_EX(RETURN_FALSE);
 
     zend_update_property_stringl(swoole_http_server_coro_ce, ZEND_THIS, ZEND_STRL("host"), host, l_host);
@@ -259,8 +268,15 @@ static PHP_METHOD(swoole_http_server_coro, __construct)
 
     http_server_coro_t *hsc = swoole_http_server_coro_fetch_object(Z_OBJ_P(ZEND_THIS));
     string host_str(host, l_host);
-    hsc->server = new http_server(Socket::get_type(host_str));
+    hsc->server = new http_server(Socket::convert_to_type(host_str));
     Socket *sock = hsc->server->socket;
+
+#ifdef SO_REUSEPORT
+    if (reuse_port)
+    {
+        sock->set_option(SOL_SOCKET, SO_REUSEPORT, 1);
+    }
+#endif
     if (!sock->bind(host_str, port))
     {
         http_server_set_error(ZEND_THIS, sock);
@@ -426,47 +442,60 @@ static PHP_METHOD(swoole_http_server_coro, onAccept)
     while (true)
     {
         auto buffer = sock->get_read_buffer();
-        ssize_t retval = sock->recv(buffer->str + buffer->offset, buffer->size - buffer->offset);
-        if (unlikely(retval <= 0))
+        ssize_t retval = sock->recv(buffer->str + total_bytes + buffer->offset, buffer->size - total_bytes - buffer->offset);
+        if (sw_unlikely(retval <= 0))
         {
             break;
         }
+        total_bytes += retval;
 
         if (!ctx)
         {
             ctx = hs->create_context(sock, zconn);
         }
 
-        total_bytes += retval;
         if (total_bytes > sock->protocol.package_max_length)
         {
             ctx->response.status = 413;
+            _error:
             zval_dtor(ctx->request.zobject);
             zval_dtor(ctx->response.zobject);
             break;
         }
 
-        parsed_n = swoole_http_requset_parse(ctx, buffer->str, retval);
+        parsed_n = swoole_http_requset_parse(ctx, buffer->str + total_bytes - retval, retval);
+
         swTraceLog(SW_TRACE_CO_HTTP_SERVER, "parsed_n=%ld, retval=%ld, total_bytes=%ld, completed=%d", parsed_n, retval, total_bytes, ctx->completed);
 
         if (!ctx->completed)
         {
+            if (total_bytes == buffer->size)
+            {
+                if (swString_extend(buffer, buffer->size * 2) != SW_OK)
+                {
+                    ctx->response.status = 503;
+                    goto _error;
+                }
+            }
             continue;
         }
+
         if (retval > (ssize_t) parsed_n)
         {
             buffer->offset = retval - parsed_n;
-            memmove(buffer->str, buffer->str + parsed_n, buffer->offset);
+            memmove(buffer->str, buffer->str + total_bytes + parsed_n, buffer->offset);
         }
         else
         {
             buffer->offset = 0;
         }
 
+        ZVAL_STRINGL(&ctx->request.zdata, buffer->str, total_bytes);
+
         zval *zserver = ctx->request.zserver;
         add_assoc_long(zserver, "server_port", hs->socket->get_bind_port());
-        add_assoc_long(zserver, "remote_port", (zend_long) swConnection_get_port(sock->socket));
-        add_assoc_string(zserver, "remote_addr", (char *) swConnection_get_ip(sock->socket));
+        add_assoc_long(zserver, "remote_port", (zend_long) hs->socket->get_port());
+        add_assoc_string(zserver, "remote_addr", (char *) hs->socket->get_ip());
 
         php_swoole_fci *fci = hs->get_handler(ctx);
         zval args[2];

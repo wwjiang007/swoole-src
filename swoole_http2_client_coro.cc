@@ -116,7 +116,7 @@ public:
 
     inline bool is_available()
     {
-        if (unlikely(!client))
+        if (sw_unlikely(!client))
         {
             SwooleG.error = SW_ERROR_CLIENT_NO_CONNECTION;
             zend_update_property_long(swoole_http2_client_coro_ce, zobject, ZEND_STRL("errCode"), ECONNRESET);
@@ -136,7 +136,7 @@ public:
 
     inline bool recv_packet(double timeout)
     {
-        if (unlikely(client->recv_packet(timeout) <= 0))
+        if (sw_unlikely(client->recv_packet(timeout) <= 0))
         {
             io_error();
             return false;
@@ -151,7 +151,7 @@ public:
     bool send_data(uint32_t stream_id, zval *data, bool end);
     uint32_t send_request(zval *req);
     bool send_goaway_frame(zend_long error_code, const char *debug_data, size_t debug_data_len);
-    enum swReturn_type parse_frame(zval *return_value);
+    enum swReturn_code parse_frame(zval *return_value);
     bool close();
 
     ~http2_client()
@@ -164,7 +164,7 @@ private:
 
     inline bool send(const char *buf, size_t len)
     {
-        if (unlikely(client->send_all(buf, len) != (ssize_t )len))
+        if (sw_unlikely(client->send_all(buf, len) != (ssize_t )len))
         {
             io_error();
             return false;
@@ -245,7 +245,7 @@ static const zend_function_entry swoole_http2_client_methods[] =
     PHP_FE_END
 };
 
-void swoole_http2_client_coro_init(int module_number)
+void php_swoole_http2_client_coro_minit(int module_number)
 {
     SW_INIT_CLASS_ENTRY(swoole_http2_client_coro, "Swoole\\Coroutine\\Http2\\Client", NULL, "Co\\Http2\\Client", swoole_http2_client_methods);
     SW_SET_CLASS_SERIALIZABLE(swoole_http2_client_coro, zend_class_serialize_deny, zend_class_unserialize_deny);
@@ -321,12 +321,15 @@ void swoole_http2_client_coro_init(int module_number)
 
 bool http2_client::connect()
 {
-    if (unlikely(client != nullptr))
+    if (sw_unlikely(client != nullptr))
     {
         return false;
     }
 
     client = new Socket(SW_SOCK_TCP);
+#ifdef SW_USE_OPENSSL
+    client->open_ssl = ssl;
+#endif
 
     client->http2 = 1;
     client->open_length_check = 1;
@@ -336,9 +339,6 @@ bool http2_client::connect()
 
     apply_setting(sw_zend_read_property(swoole_http2_client_coro_ce, zobject, ZEND_STRL("setting"), 0));
 
-#ifdef SW_USE_OPENSSL
-    client->open_ssl = ssl;
-#endif
     if (!client->connect(host, port))
     {
         io_error();
@@ -417,7 +417,7 @@ bool http2_client::close()
     return true;
 }
 
-enum swReturn_type http2_client::parse_frame(zval *return_value)
+enum swReturn_code http2_client::parse_frame(zval *return_value)
 {
     char *buf = client->get_read_buffer()->str;
     uint8_t type = buf[3];
@@ -552,7 +552,7 @@ enum swReturn_type http2_client::parse_frame(zval *return_value)
         zend_update_property_stringl(swoole_http2_client_coro_ce, zobject, ZEND_STRL("errMsg"), buf, length - SW_HTTP2_GOAWAY_SIZE);
         zend_update_property_long(swoole_http2_client_coro_ce, zobject, ZEND_STRL("serverLastStreamId"), server_last_stream_id);
         close();
-        return SW_CONTINUE;
+        return SW_CLOSE;
     }
     case SW_HTTP2_TYPE_RST_STREAM:
     {
@@ -605,9 +605,9 @@ enum swReturn_type http2_client::parse_frame(zval *return_value)
 #ifdef SW_HAVE_ZLIB
             if (stream->gzip)
             {
-                if (php_swoole_zlib_uncompress(&stream->gzip_stream, stream->gzip_buffer, buf, length) == SW_ERR)
+                if (php_swoole_zlib_decompress(&stream->gzip_stream, stream->gzip_buffer, buf, length) == SW_ERR)
                 {
-                    swWarn("uncompress failed");
+                    swWarn("decompress failed");
                     return SW_ERROR;
                 }
                 swString_append_ptr(stream->buffer, stream->gzip_buffer->str, stream->gzip_buffer->length);
@@ -676,7 +676,7 @@ enum swReturn_type http2_client::parse_frame(zval *return_value)
 }
 
 #ifdef SW_HAVE_ZLIB
-int php_swoole_zlib_uncompress(z_stream *stream, swString *buffer, char *body, int length)
+int php_swoole_zlib_decompress(z_stream *stream, swString *buffer, char *body, int length)
 {
     int status = 0;
 
@@ -1312,11 +1312,6 @@ static PHP_METHOD(swoole_http2_client_coro, recv)
 {
     http2_client *h2c = (http2_client *) swoole_get_object(ZEND_THIS);
 
-    if (!h2c->is_available())
-    {
-        RETURN_FALSE;
-    }
-
     double timeout = 0;
     if (zend_parse_parameters(ZEND_NUM_ARGS(), "|d", &timeout) == FAILURE)
     {
@@ -1325,12 +1320,15 @@ static PHP_METHOD(swoole_http2_client_coro, recv)
 
     while (true)
     {
+        if (!h2c->is_available())
+        {
+            RETURN_FALSE;
+        }
         if (!h2c->recv_packet(timeout))
         {
             RETURN_FALSE;
         }
-
-        enum swReturn_type ret = h2c->parse_frame(return_value);
+        enum swReturn_code ret = h2c->parse_frame(return_value);
         if (ret == SW_CONTINUE)
         {
             continue;

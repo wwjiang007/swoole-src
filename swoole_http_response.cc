@@ -187,7 +187,7 @@ const zend_function_entry swoole_http_response_methods[] =
     PHP_FE_END
 };
 
-void swoole_http_response_init(int module_number)
+void php_swoole_http_response_minit(int module_number)
 {
     SW_INIT_CLASS_ENTRY(swoole_http_response, "Swoole\\Http\\Response", "swoole_http_response", NULL, swoole_http_response_methods);
     SW_SET_CLASS_SERIALIZABLE(swoole_http_response, zend_class_serialize_deny, zend_class_unserialize_deny);
@@ -263,7 +263,7 @@ static PHP_METHOD(swoole_http_response, write)
     // then the content stream is first compressed, then chunked;
     // so the chunk encoding itself is not compressed,
     // **and the data in each chunk is not compressed individually.**
-    // The remote endpoint then decodes the stream by concatenating the chunks and uncompressing the result.
+    // The remote endpoint then decodes the stream by concatenating the chunks and decompressing the result.
     swString_clear(swoole_http_buffer);
     char *hex_string = swoole_dec2hex(http_body.length, 16);
     int hex_len = strlen(hex_string);
@@ -330,7 +330,7 @@ static void http_build_header(http_context *ctx, swString *response, int body_le
             {
                 header_flag |= HTTP_HEADER_DATE;
             }
-            else if (strncasecmp(key, "Content-Length", keylen) == 0)
+            else if (strncasecmp(key, "Content-Length", keylen) == 0 && ctx->parser.method != PHP_HTTP_HEAD)
             {
                 continue; // ignore
             }
@@ -394,8 +394,8 @@ static void http_build_header(http_context *ctx, swString *response, int body_le
             swString_append_ptr(response, ZEND_STRL("Transfer-Encoding: chunked\r\n"));
         }
     }
-    else
     // Content-Length
+    else if (body_length > 0 || ctx->parser.method != PHP_HTTP_HEAD)
     {
 #ifdef SW_HAVE_ZLIB
         if (ctx->accept_compression)
@@ -571,7 +571,7 @@ static PHP_METHOD(swoole_http_response, end)
 {
     zval *zdata = NULL;
 
-    http_context *ctx = swoole_http_context_get(ZEND_THIS, 0);
+    http_context *ctx = swoole_http_context_get(ZEND_THIS, 1);
     if (UNEXPECTED(!ctx))
     {
         RETURN_FALSE;
@@ -677,7 +677,6 @@ void swoole_http_response_end(http_context *ctx, zval *zdata, zval *return_value
                 if (!ctx->send(ctx, send_body_str, send_body_len))
                 {
                     ctx->close(ctx);
-                    swoole_http_context_free(ctx);
                     RETURN_FALSE;
                 }
                 goto _skip_copy;
@@ -1235,13 +1234,13 @@ static PHP_METHOD(swoole_http_response, __destruct)
                 if (!conn || conn->closed || conn->removed || ctx->detached)
                 {
                     swoole_http_context_free(ctx);
+                    ctx = nullptr;
                 }
                 else
                 {
                     swoole_http_response_end(ctx, nullptr, return_value);
                 }
             }
-            ctx = (http_context *) swoole_get_object(ZEND_THIS);
         }
         if (ctx)
         {

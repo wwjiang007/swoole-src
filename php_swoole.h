@@ -301,54 +301,56 @@ PHP_FUNCTION(swoole_last_error);
  * MINIT <Sort by dependency>
  * ==============================================================
  */
-void swoole_event_init(int module_number);
+void php_swoole_event_minit(int module_number);
 // base
-void swoole_atomic_init(int module_number);
-void swoole_buffer_init(int module_number);
-void swoole_lock_init(int module_number);
-void swoole_process_init(int module_number);
-void swoole_process_pool_init(int module_number);
-void swoole_table_init(int module_number);
-void swoole_timer_init(int module_number);
+void php_swoole_atomic_minit(int module_number);
+void php_swoole_buffer_minit(int module_number);
+void php_swoole_lock_minit(int module_number);
+void php_swoole_process_minit(int module_number);
+void php_swoole_process_pool_minit(int module_number);
+void php_swoole_table_minit(int module_number);
+void php_swoole_timer_minit(int module_number);
 // coroutine
-void swoole_async_coro_init(int module_number);
-void swoole_coroutine_init(int module_number);
-void swoole_channel_coro_init(int module_number);
-void swoole_runtime_init(int module_number);
+void php_swoole_async_coro_minit(int module_number);
+void php_swoole_coroutine_minit(int module_number);
+void php_swoole_coroutine_system_minit(int module_number);
+void php_swoole_coroutine_scheduler_minit(int module_number);
+void php_swoole_channel_coro_minit(int module_number);
+void php_swoole_runtime_minit(int module_number);
 // client
-void swoole_socket_coro_init(int module_number);
-void swoole_client_init(int module_number);
-void swoole_client_coro_init(int module_number);
-void swoole_http_client_coro_init(int module_number);
-void swoole_mysql_coro_init(int module_number);
-void swoole_redis_coro_init(int module_number);
+void php_swoole_socket_coro_minit(int module_number);
+void php_swoole_client_minit(int module_number);
+void php_swoole_client_coro_minit(int module_number);
+void php_swoole_http_client_coro_minit(int module_number);
+void php_swoole_mysql_coro_minit(int module_number);
+void php_swoole_redis_coro_minit(int module_number);
 #ifdef SW_USE_HTTP2
-void swoole_http2_client_coro_init(int module_number);
+void php_swoole_http2_client_coro_minit(int module_number);
 #endif
 // server
-void swoole_server_init(int module_number);
-void swoole_server_port_init(int module_number);
-void swoole_http_request_init(int module_number);
-void swoole_http_response_init(int module_number);
-void swoole_http_server_init(int module_number);
-void swoole_http_server_coro_init(int module_number);
-void swoole_websocket_server_init(int module_number);
-void swoole_redis_server_init(int module_number);
+void php_swoole_server_minit(int module_number);
+void php_swoole_server_port_minit(int module_number);
+void php_swoole_http_request_minit(int module_number);
+void php_swoole_http_response_minit(int module_number);
+void php_swoole_http_server_minit(int module_number);
+void php_swoole_http_server_coro_minit(int module_number);
+void php_swoole_websocket_server_minit(int module_number);
+void php_swoole_redis_server_minit(int module_number);
 
 /**
  * RSHUTDOWN
  * ==============================================================
  */
-void swoole_async_coro_rshutdown();
-void swoole_redis_server_rshutdown();
-void swoole_coroutine_rshutdown();
-void swoole_runtime_rshutdown();
-void swoole_server_rshutdown();
+void php_swoole_async_coro_rshutdown();
+void php_swoole_redis_server_rshutdown();
+void php_swoole_coroutine_rshutdown();
+void php_swoole_runtime_rshutdown();
+void php_swoole_server_rshutdown();
 
 void php_swoole_process_clean();
 int php_swoole_process_start(swWorker *process, zval *zobject);
 
-void php_swoole_reactor_init();
+int php_swoole_reactor_init();
 
 // shutdown
 void php_swoole_register_shutdown_function(const char *function);
@@ -379,7 +381,7 @@ int php_swoole_task_pack(swEventData *task, zval *data);
 zval* php_swoole_task_unpack(swEventData *task_result);
 
 #ifdef SW_HAVE_ZLIB
-int php_swoole_zlib_uncompress(z_stream *stream, swString *buffer, char *body, int length);
+int php_swoole_zlib_decompress(z_stream *stream, swString *buffer, char *body, int length);
 #endif
 
 static sw_inline void* swoole_get_object_by_handle(uint32_t handle)
@@ -390,7 +392,7 @@ static sw_inline void* swoole_get_object_by_handle(uint32_t handle)
 
 static sw_inline void* swoole_get_property_by_handle(uint32_t handle, int property_id)
 {
-    if (unlikely(handle >= swoole_objects.property_size[property_id]))
+    if (sw_unlikely(handle >= swoole_objects.property_size[property_id]))
     {
         return NULL;
     }
@@ -734,7 +736,7 @@ static sw_inline zend_string* sw_zend_string_recycle(zend_string *s, size_t allo
 
 static sw_inline int add_assoc_ulong_safe_ex(zval *arg, const char *key, size_t key_len, zend_ulong value)
 {
-    if (likely(value <= ZEND_LONG_MAX))
+    if (sw_likely(value <= ZEND_LONG_MAX))
     {
         return add_assoc_long_ex(arg, key, key_len, value);
     }
@@ -815,7 +817,7 @@ static sw_inline int add_assoc_ulong_safe(zval *arg, const char *key, zend_ulong
     module##_handlers.offset = XtOffsetOf(_struct, _std)
 
 #define SW_PREVENT_USER_DESTRUCT()  do { \
-    if (unlikely(!(GC_FLAGS(Z_OBJ_P(ZEND_THIS)) & IS_OBJ_DESTRUCTOR_CALLED))) { \
+    if (sw_unlikely(!(GC_FLAGS(Z_OBJ_P(ZEND_THIS)) & IS_OBJ_DESTRUCTOR_CALLED))) { \
         RETURN_NULL(); \
     } \
 } while (0)
@@ -838,10 +840,12 @@ static sw_inline int sw_zend_register_function_alias
         return FAILURE;
     }
     SW_ASSERT(origin_function->common.type == ZEND_INTERNAL_FUNCTION);
-    char _alias[alias_length + 1];
-    strncpy(_alias, alias, alias_length)[alias_length] = '\0';
+    char *_alias = (char *) emalloc(alias_length + 1);
+    ((char *) memcpy(_alias, alias, alias_length))[alias_length] = '\0';
     zend_function_entry zfe[] = {{_alias, origin_function->internal_function.handler, ((zend_internal_arg_info *) origin_function->common.arg_info) - 1, origin_function->common.num_args, 0 }, PHP_FE_END};
-    return zend_register_functions(origin_function->common.scope, zfe, alias_function_table, origin_function->common.type);
+    int ret = zend_register_functions(origin_function->common.scope, zfe, alias_function_table, origin_function->common.type);
+    efree(_alias);
+    return ret;
 }
 
 static sw_inline int sw_zend_register_class_alias(const char *name, size_t name_len, zend_class_entry *ce)
@@ -1157,15 +1161,19 @@ static sw_inline void sw_zend_fci_cache_free(void* fci_cache)
 
 //----------------------------------Misc API------------------------------------
 
-static sw_inline void php_swoole_check_reactor()
+static sw_inline int php_swoole_check_reactor()
 {
     if (SWOOLE_G(req_status) == PHP_SWOOLE_RSHUTDOWN_BEGIN)
     {
-        return ;
+        return -1;
     }
-    if (unlikely(!SwooleG.main_reactor))
+    if (sw_unlikely(!SwooleG.main_reactor))
     {
-        php_swoole_reactor_init();
+        return php_swoole_reactor_init() == SW_OK ? 1 : -1;
+    }
+    else
+    {
+        return 0;
     }
 }
 

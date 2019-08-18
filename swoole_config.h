@@ -192,6 +192,7 @@
  */
 #define SW_HTTP_SERVER_SOFTWARE          "swoole-http-server"
 #define SW_HTTP_PARAM_MAX_NUM            128
+#define SW_HTTP_FORM_KEYLEN              512
 #define SW_HTTP_COOKIE_KEYLEN            128
 #define SW_HTTP_COOKIE_VALLEN            4096
 #define SW_HTTP_RESPONSE_INIT_SIZE       65536
@@ -210,6 +211,7 @@
 
 #define SW_HTTP_BAD_REQUEST_PACKET         "HTTP/1.1 400 Bad Request\r\n\r\n"
 #define SW_HTTP_SERVICE_UNAVAILABLE_PACKET "HTTP/1.1 503 Service Unavailable\r\n\r\n"
+#define SW_HTTP_BAD_REQUEST_TOO_LARGE      "HTTP/1.1 413 Request Entity Too Large\r\n\r\n"
 #define SW_HTTP_PAGE_400                   "<html><body><h2>HTTP 400 Bad Request</h2><hr><i>Powered by Swoole</i></body></html>"
 #define SW_HTTP_PAGE_404                   "<html><body><h2>HTTP 404 Not Found</h2><hr><i>Powered by Swoole</i></body></html>"
 

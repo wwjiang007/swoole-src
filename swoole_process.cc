@@ -53,6 +53,7 @@ static PHP_METHOD(swoole_process, daemon);
 #ifdef HAVE_CPU_AFFINITY
 static PHP_METHOD(swoole_process, setaffinity);
 #endif
+static PHP_METHOD(swoole_process, set);
 static PHP_METHOD(swoole_process, setTimeout);
 static PHP_METHOD(swoole_process, setBlocking);
 static PHP_METHOD(swoole_process, start);
@@ -111,6 +112,10 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_process_setaffinity, 0, 0, 1)
 ZEND_END_ARG_INFO()
 #endif
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_process_set, 0, 0, 1)
+    ZEND_ARG_ARRAY_INFO(0, settings, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_process_setTimeout, 0, 0, 1)
     ZEND_ARG_INFO(0, seconds)
 ZEND_END_ARG_INFO()
@@ -168,6 +173,7 @@ static const zend_function_entry swoole_process_methods[] =
 #ifdef HAVE_CPU_AFFINITY
     PHP_ME(swoole_process, setaffinity, arginfo_swoole_process_setaffinity, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
 #endif
+    PHP_ME(swoole_process, set, arginfo_swoole_process_set, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process, setTimeout, arginfo_swoole_process_setTimeout, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process, setBlocking, arginfo_swoole_process_setBlocking, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process, useQueue, arginfo_swoole_process_useQueue, ZEND_ACC_PUBLIC)
@@ -186,7 +192,7 @@ static const zend_function_entry swoole_process_methods[] =
     PHP_FE_END
 };
 
-void swoole_process_init(int module_number)
+void php_swoole_process_minit(int module_number)
 {
     SW_INIT_CLASS_ENTRY(swoole_process, "Swoole\\Process", "swoole_process", NULL, swoole_process_methods);
     SW_SET_CLASS_SERIALIZABLE(swoole_process, zend_class_serialize_deny, zend_class_unserialize_deny);
@@ -383,7 +389,7 @@ static PHP_METHOD(swoole_process, wait)
         options |= WNOHANG;
     }
 
-    pid_t pid = swWaitpid(-1, &status, options);
+    pid_t pid = swoole_waitpid(-1, &status, options);
     if (pid > 0)
     {
         array_init(return_value);
@@ -484,7 +490,7 @@ static PHP_METHOD(swoole_process, kill)
         RETURN_FALSE;
     }
 
-    int ret = swKill((int) pid, (int) sig);
+    int ret = swoole_kill((int) pid, (int) sig);
     if (ret < 0)
     {
         if (!(sig == 0 && errno == ESRCH))
@@ -723,11 +729,21 @@ int php_swoole_process_start(swWorker *process, zval *zobject)
 
     php::process *proc = (php::process *) process->ptr2;
 
+    //eventloop create
+    if (proc->enable_coroutine && php_swoole_reactor_init() < 0)
+    {
+        return SW_ERR;
+    }
+    //main function
     if (UNEXPECTED(!zend::function::call(&proc->fci_cache, 1, zobject, NULL, proc->enable_coroutine)))
     {
         php_swoole_error(E_WARNING, "%s->onStart handler error", SW_Z_OBJCE_NAME_VAL_P(zobject));
     }
-
+    //eventloop start
+    if (proc->enable_coroutine)
+    {
+        php_swoole_event_wait();
+    }
     // equivalent to exit
     sw_zend_bailout();
 
@@ -738,7 +754,7 @@ static PHP_METHOD(swoole_process, start)
 {
     swWorker *process = (swWorker *) swoole_get_object(ZEND_THIS);
 
-    if (process->pid && swKill(process->pid, 0) == 0)
+    if (process->pid && swoole_kill(process->pid, 0) == 0)
     {
         php_swoole_fatal_error(E_WARNING, "process has already been started");
         RETURN_FALSE;
@@ -1153,6 +1169,27 @@ static PHP_METHOD(swoole_process, close)
     RETURN_TRUE;
 }
 
+static PHP_METHOD(swoole_process, set)
+{
+    zval *zset = NULL;
+    HashTable *vht = NULL;
+    zval *ztmp;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ARRAY(zset)
+    ZEND_PARSE_PARAMETERS_END_EX(RETURN_FALSE);
+
+    vht = Z_ARRVAL_P(zset);
+
+    swWorker *process = (swWorker *) swoole_get_object(ZEND_THIS);
+    php::process *proc = (php::process *) process->ptr2;
+
+    if (php_swoole_array_get_value(vht, "enable_coroutine", ztmp))
+    {
+        proc->enable_coroutine = zval_is_true(ztmp);
+    }
+}
+
 static PHP_METHOD(swoole_process, setTimeout)
 {
     double seconds;
@@ -1186,11 +1223,11 @@ static PHP_METHOD(swoole_process, setBlocking)
     }
     if (blocking)
     {
-        swSetBlock(process->pipe);
+        swSocket_set_blocking(process->pipe);
     }
     else
     {
-        swSetNonBlock(process->pipe);
+        swSocket_set_nonblock(process->pipe);
     }
     if (SwooleG.main_reactor)
     {

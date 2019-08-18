@@ -42,11 +42,11 @@ static void swProcessPool_killTimeout(swTimer *timer, swTimer_node *tnode)
         if (i >= pool->reload_worker_i)
         {
             reload_worker_pid = pool->reload_workers[i].pid;
-            if (swKill(reload_worker_pid, 0) == -1)
+            if (swoole_kill(reload_worker_pid, 0) == -1)
             {
                 continue;
             }
-            if (swKill(reload_worker_pid, SIGKILL) < 0)
+            if (swoole_kill(reload_worker_pid, SIGKILL) < 0)
             {
                 swSysWarn("swKill(%d, SIGKILL) [%d] failed", pool->reload_workers[i].pid, i);
             }
@@ -366,7 +366,7 @@ void swProcessPool_shutdown(swProcessPool *pool)
     for (i = 0; i < pool->worker_num; i++)
     {
         worker = &pool->workers[i];
-        if (swKill(worker->pid, SIGTERM) < 0)
+        if (swoole_kill(worker->pid, SIGTERM) < 0)
         {
             swSysWarn("swKill(%d) failed", worker->pid);
             continue;
@@ -375,7 +375,7 @@ void swProcessPool_shutdown(swProcessPool *pool)
     for (i = 0; i < pool->worker_num; i++)
     {
         worker = &pool->workers[i];
-        if (swWaitpid(worker->pid, &status, 0) < 0)
+        if (swoole_waitpid(worker->pid, &status, 0) < 0)
         {
             swSysWarn("waitpid(%d) failed", worker->pid);
         }
@@ -538,10 +538,10 @@ static int swProcessPool_worker_loop(swProcessPool *pool, swWorker *worker)
          */
         if (n < 0)
         {
-            if (errno == EINTR && SwooleG.signal_alarm)
+            if (errno == EINTR && SwooleWG.signal_alarm)
             {
                 _alarm_handler:
-                SwooleG.signal_alarm = 0;
+                SwooleWG.signal_alarm = 0;
                 swTimer_select(&SwooleG.timer);
             }
             continue;
@@ -568,7 +568,7 @@ static int swProcessPool_worker_loop(swProcessPool *pool, swWorker *worker)
         /**
          * timer
          */
-        if (SwooleG.signal_alarm)
+        if (SwooleWG.signal_alarm)
         {
             goto _alarm_handler;
         }
@@ -688,10 +688,10 @@ static int swProcessPool_worker_loop_ex(swProcessPool *pool, swWorker *worker)
          */
         if (n < 0)
         {
-            if (errno == EINTR && SwooleG.signal_alarm)
+            if (errno == EINTR && SwooleWG.signal_alarm)
             {
                 _alarm_handler:
-                SwooleG.signal_alarm = 0;
+                SwooleWG.signal_alarm = 0;
                 swTimer_select(&SwooleG.timer);
             }
             continue;
@@ -716,7 +716,7 @@ static int swProcessPool_worker_loop_ex(swProcessPool *pool, swWorker *worker)
         /**
          * timer
          */
-        if (SwooleG.signal_alarm)
+        if (SwooleWG.signal_alarm)
         {
             goto _alarm_handler;
         }
@@ -736,7 +736,6 @@ int swProcessPool_add_worker(swProcessPool *pool, swWorker *worker)
 int swProcessPool_wait(swProcessPool *pool)
 {
     int pid, new_pid;
-//    int reload_worker_i = 0;
     pid_t reload_worker_pid = 0;
     int ret;
     int status;
@@ -751,9 +750,9 @@ int swProcessPool_wait(swProcessPool *pool)
     while (SwooleG.running)
     {
         pid = wait(&status);
-        if (SwooleG.signal_alarm == 1)
+        if (SwooleWG.signal_alarm)
         {
-            SwooleG.signal_alarm = 0;
+            SwooleWG.signal_alarm = 0;
             swTimer_select(&SwooleG.timer);
         }
         if (pid < 0)
@@ -833,7 +832,7 @@ int swProcessPool_wait(swProcessPool *pool)
                 continue;
             }
             reload_worker_pid = pool->reload_workers[pool->reload_worker_i].pid;
-            ret = swKill(reload_worker_pid, SIGTERM);
+            ret = swoole_kill(reload_worker_pid, SIGTERM);
             if (ret < 0)
             {
                 if (errno == ECHILD)

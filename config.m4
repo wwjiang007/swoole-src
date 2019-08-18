@@ -39,14 +39,14 @@ PHP_ARG_ENABLE(mysqlnd, enable mysqlnd support,
 PHP_ARG_WITH(openssl_dir, dir of openssl,
 [  --with-openssl-dir[=DIR]    Include OpenSSL support (requires OpenSSL >= 0.9.6)], no, no)
 
-PHP_ARG_WITH(phpx_dir, dir of php-x,
-[  --with-phpx-dir[=DIR]       Include PHP-X support], no, no)
-
 PHP_ARG_WITH(jemalloc_dir, dir of jemalloc,
 [  --with-jemalloc-dir[=DIR]   Include jemalloc support], no, no)
 
 PHP_ARG_ENABLE(asan, enable asan,
 [  --enable-asan             Enable asan], no, no)
+
+PHP_ARG_ENABLE(gcov, enable gcov,
+[  --enable-gcov             Enable gcov], no, no)
 
 AC_DEFUN([SWOOLE_HAVE_PHP_EXT], [
     extname=$1
@@ -181,12 +181,6 @@ AC_DEFUN([AC_SWOOLE_CHECK_SOCKETS], [
 
     AC_CHECK_FUNCS([hstrerror socketpair if_nametoindex if_indextoname])
     AC_CHECK_HEADERS([netdb.h netinet/tcp.h sys/un.h sys/sockio.h])
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-#include <sys/types.h>
-#include <sys/socket.h>
-    ]], [[static struct msghdr tp; int n = (int) tp.msg_flags; return n]])],[],
-        [AC_DEFINE(MISSING_MSGHDR_MSGFLAGS, 1, [ ])]
-    )
     AC_DEFINE([HAVE_SOCKETS], 1, [ ])
 
     dnl Check for fied ss_family in sockaddr_storage (missing in AIX until 5.3)
@@ -311,6 +305,13 @@ if test "$PHP_SWOOLE" != "no"; then
     if test "$PHP_ASAN" != "no"; then
         PHP_DEBUG=1
         CFLAGS="$CFLAGS -fsanitize=address -fno-omit-frame-pointer"
+        CXXFLAGS="$CXXFLAGS -fsanitize=address -fno-omit-frame-pointer"
+    fi
+    
+    if test "$PHP_GCOV" != "no"; then
+        PHP_DEBUG=1
+        CFLAGS="$CFLAGS -fprofile-arcs -ftest-coverage"
+        CXXFLAGS="$CXXFLAGS -fprofile-arcs -ftest-coverage"
     fi
 
     if test "$PHP_TRACE_LOG" != "no"; then
@@ -380,13 +381,6 @@ if test "$PHP_SWOOLE" != "no"; then
         PHP_ADD_LIBRARY(crypto, 1, SWOOLE_SHARED_LIBADD)
     fi
 
-    if test "$PHP_PHPX_DIR" != "no"; then
-        PHP_ADD_INCLUDE("${PHP_PHPX_DIR}/include")
-        PHP_ADD_LIBRARY_WITH_PATH(phpx, "${PHP_PHPX_DIR}/${PHP_LIBDIR}")
-        AC_DEFINE(SW_USE_PHPX, 1, [enable PHP-X support])
-        PHP_ADD_LIBRARY(phpx, 1, SWOOLE_SHARED_LIBADD)
-    fi
-
     if test "$PHP_JEMALLOC_DIR" != "no"; then
         AC_DEFINE(SW_USE_JEMALLOC, 1, [use jemalloc])
         PHP_ADD_INCLUDE("${PHP_JEMALLOC_DIR}/include")
@@ -441,14 +435,14 @@ if test "$PHP_SWOOLE" != "no"; then
         src/memory/ring_buffer.c \
         src/memory/shared_memory.c \
         src/memory/table.c \
-        src/network/async_thread.cc \
         src/network/client.c \
         src/network/connection.c \
-        src/network/dns.c \
+        src/network/dns.cc \
         src/network/process_pool.c \
         src/network/stream.c \
         src/network/thread_pool.c \
         src/network/timer.c \
+        src/os/async_thread.cc \
         src/os/base.c \
         src/os/msg_queue.c \
         src/os/sendfile.c \
@@ -485,11 +479,12 @@ if test "$PHP_SWOOLE" != "no"; then
         src/server/task_worker.c \
         src/server/worker.cc \
         src/wrapper/client.cc \
+        src/wrapper/event.cc \
         src/wrapper/server.cc \
         src/wrapper/timer.cc \
         swoole.cc \
         swoole_async_coro.cc \
-        swoole_atomic.c \
+        swoole_atomic.cc \
         swoole_buffer.c \
         swoole_channel_coro.cc \
         swoole_client.cc \
@@ -505,7 +500,7 @@ if test "$PHP_SWOOLE" != "no"; then
         swoole_http_response.cc \
         swoole_http_server.cc \
         swoole_http_server_coro.cc \
-        swoole_lock.c \
+        swoole_lock.cc \
         swoole_mysql_coro.cc \
         swoole_mysql_proto.cc \
         swoole_process.cc \
@@ -516,9 +511,9 @@ if test "$PHP_SWOOLE" != "no"; then
         swoole_server.cc \
         swoole_server_port.cc \
         swoole_socket_coro.cc \
-        swoole_table.c \
+        swoole_table.cc \
         swoole_timer.cc \
-        swoole_trace.c \
+        swoole_trace.cc \
         swoole_websocket_server.cc"
 
     swoole_source_file="$swoole_source_file \
@@ -600,6 +595,20 @@ if test "$PHP_SWOOLE" != "no"; then
             SW_NO_USE_ASM_CONTEXT="yes"
             AC_DEFINE([SW_NO_USE_ASM_CONTEXT], 1, [use boost asm context?])
         fi
+     elif test "$SW_CPU" = "ppc32"; then
+        if test "$SW_OS" = "LINUX"; then
+            SW_CONTEXT_ASM_FILE="ppc32_sysv_elf_gas.S"
+        else
+            SW_NO_USE_ASM_CONTEXT="yes"
+            AC_DEFINE([SW_NO_USE_ASM_CONTEXT], 1, [use boost asm context?])
+        fi
+    elif test "$SW_CPU" = "ppc64"; then
+        if test "$SW_OS" = "LINUX"; then
+            SW_CONTEXT_ASM_FILE="ppc64_sysv_elf_gas.S"
+        else
+            SW_NO_USE_ASM_CONTEXT="yes"
+            AC_DEFINE([SW_NO_USE_ASM_CONTEXT], 1, [use boost asm context?])
+        fi
     elif test "$SW_CPU" = "mips32"; then
         if test "$SW_OS" = "LINUX"; then
            SW_CONTEXT_ASM_FILE="mips32_o32_elf_gas.S"
@@ -607,6 +616,8 @@ if test "$PHP_SWOOLE" != "no"; then
             SW_NO_USE_ASM_CONTEXT="yes"
             AC_DEFINE([SW_NO_USE_ASM_CONTEXT], 1, [use boost asm context?])
         fi
+    else
+        SW_NO_USE_ASM_CONTEXT="yes"
     fi
 
     if test "$SW_NO_USE_ASM_CONTEXT" = "no"; then

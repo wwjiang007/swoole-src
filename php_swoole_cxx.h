@@ -19,6 +19,7 @@
 #include "php_swoole.h"
 #include "swoole_cxx.h"
 #include "swoole_coroutine.h"
+#include "swoole_api.h"
 
 #include <string>
 
@@ -94,12 +95,12 @@ public:
 
     char* dup()
     {
-        return likely(len() > 0) ? sw_strndup(val(), len()) : nullptr;
+        return sw_likely(len() > 0) ? sw_strndup(val(), len()) : nullptr;
     }
 
     char* edup()
     {
-        return likely(len() > 0) ? estrndup(val(), len()) : nullptr;
+        return sw_likely(len() > 0) ? estrndup(val(), len()) : nullptr;
     }
 
     ~string()

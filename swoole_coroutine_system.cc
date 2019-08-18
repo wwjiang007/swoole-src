@@ -23,6 +23,92 @@ struct util_socket
     swTimer_node *timer;
 };
 
+static zend_class_entry *swoole_coroutine_system_ce;
+static zend_object_handlers swoole_coroutine_system_handlers;
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_exec, 0, 0, 1)
+    ZEND_ARG_INFO(0, command)
+    ZEND_ARG_INFO(0, get_error_stream)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_sleep, 0, 0, 1)
+    ZEND_ARG_INFO(0, seconds)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_fread, 0, 0, 1)
+    ZEND_ARG_INFO(0, handle)
+    ZEND_ARG_INFO(0, length)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_fgets, 0, 0, 1)
+    ZEND_ARG_INFO(0, handle)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_fwrite, 0, 0, 2)
+    ZEND_ARG_INFO(0, handle)
+    ZEND_ARG_INFO(0, string)
+    ZEND_ARG_INFO(0, length)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_gethostbyname, 0, 0, 1)
+    ZEND_ARG_INFO(0, domain_name)
+    ZEND_ARG_INFO(0, family)
+    ZEND_ARG_INFO(0, timeout)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_dnsLookup, 0, 0, 1)
+    ZEND_ARG_INFO(0, domain_name)
+    ZEND_ARG_INFO(0, timeout)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_getaddrinfo, 0, 0, 1)
+    ZEND_ARG_INFO(0, hostname)
+    ZEND_ARG_INFO(0, family)
+    ZEND_ARG_INFO(0, socktype)
+    ZEND_ARG_INFO(0, protocol)
+    ZEND_ARG_INFO(0, service)
+    ZEND_ARG_INFO(0, timeout)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_readFile, 0, 0, 1)
+    ZEND_ARG_INFO(0, filename)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_writeFile, 0, 0, 2)
+    ZEND_ARG_INFO(0, filename)
+    ZEND_ARG_INFO(0, data)
+    ZEND_ARG_INFO(0, flags)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_system_statvfs, 0, 0, 1)
+    ZEND_ARG_INFO(0, path)
+ZEND_END_ARG_INFO()
+
+
+static const zend_function_entry swoole_coroutine_system_methods[] =
+{
+    ZEND_FENTRY(gethostbyname, ZEND_FN(swoole_coroutine_gethostbyname), arginfo_swoole_coroutine_system_gethostbyname, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_FENTRY(dnsLookup, ZEND_FN(swoole_async_dns_lookup_coro), arginfo_swoole_coroutine_system_dnsLookup, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    PHP_ME(swoole_coroutine_system, exec, arginfo_swoole_coroutine_system_exec, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, sleep, arginfo_swoole_coroutine_system_sleep, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, fread, arginfo_swoole_coroutine_system_fread, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, fwrite, arginfo_swoole_coroutine_system_fwrite, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, fgets, arginfo_swoole_coroutine_system_fgets, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, getaddrinfo, arginfo_swoole_coroutine_system_getaddrinfo, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, readFile, arginfo_swoole_coroutine_system_readFile, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, writeFile, arginfo_swoole_coroutine_system_writeFile, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_coroutine_system, statvfs, arginfo_swoole_coroutine_system_statvfs, ZEND_ACC_PUBLIC)
+    PHP_FE_END
+};
+
+void php_swoole_coroutine_system_minit(int module_number)
+{
+    SW_INIT_CLASS_ENTRY(swoole_coroutine_system, "Swoole\\Coroutine\\System", NULL, "Co\\System", swoole_coroutine_system_methods);
+    SW_SET_CLASS_CREATE_WITH_ITS_OWN_HANDLERS(swoole_coroutine_system);
+
+    SW_FUNCTION_ALIAS(&swoole_event_ce->function_table, "exec", CG(function_table), "swoole_coroutine_exec");
+}
+
 PHP_METHOD(swoole_coroutine_system, sleep)
 {
     double seconds;
@@ -227,8 +313,6 @@ static void co_socket_read(int fd, zend_long length, INTERNAL_FUNCTION_PARAMETER
     sock->buf = zend_string_alloc(length + 1, 0);
     sock->nbytes = length <= 0 ? SW_BUFFER_SIZE_STD : length;
 
-    sock->context.state = SW_CORO_CONTEXT_RUNNING;
-
     PHPCoroutine::yield_m(return_value, &sock->context);
 }
 
@@ -262,7 +346,6 @@ static void co_socket_write(int fd, char* str, size_t l_str, INTERNAL_FUNCTION_P
     _socket->object = sock;
 
     php_coro_context *context = &sock->context;
-    context->state = SW_CORO_CONTEXT_RUNNING;
     context->private_data = str;
 
     sock->nbytes = l_str;
@@ -272,6 +355,8 @@ static void co_socket_write(int fd, char* str, size_t l_str, INTERNAL_FUNCTION_P
 
 PHP_METHOD(swoole_coroutine_system, fread)
 {
+    Coroutine::get_current_safe();
+
     zval *handle;
     zend_long length = 0;
 
@@ -349,14 +434,13 @@ PHP_METHOD(swoole_coroutine_system, fread)
         efree(context);
         RETURN_FALSE;
     }
-
-    context->state = SW_CORO_CONTEXT_RUNNING;
-
     PHPCoroutine::yield_m(return_value, context);
 }
 
 PHP_METHOD(swoole_coroutine_system, fgets)
 {
+    Coroutine::get_current_safe();
+
     zval *handle;
     php_stream *stream;
 
@@ -383,7 +467,6 @@ PHP_METHOD(swoole_coroutine_system, fgets)
     php_stream_from_res(stream, Z_RES_P(handle));
 
     FILE *file;
-
     if (stream->stdiocast)
     {
         file = stream->stdiocast;
@@ -430,13 +513,14 @@ PHP_METHOD(swoole_coroutine_system, fgets)
     }
 
     context->coro_params = *handle;
-    context->state = SW_CORO_CONTEXT_RUNNING;
 
     PHPCoroutine::yield_m(return_value, context);
 }
 
 PHP_METHOD(swoole_coroutine_system, fwrite)
 {
+    Coroutine::get_current_safe();
+
     zval *handle;
     char *str;
     size_t l_str;
@@ -503,9 +587,6 @@ PHP_METHOD(swoole_coroutine_system, fwrite)
         efree(context);
         RETURN_FALSE;
     }
-
-    context->state = SW_CORO_CONTEXT_RUNNING;
-
     PHPCoroutine::yield_m(return_value, context);
 }
 
@@ -571,6 +652,8 @@ PHP_METHOD(swoole_coroutine_system, writeFile)
 
 PHP_FUNCTION(swoole_coroutine_gethostbyname)
 {
+    Coroutine::get_current_safe();
+
     char *domain_name;
     size_t l_domain_name;
     zend_long family = AF_INET;
@@ -679,7 +762,7 @@ PHP_METHOD(swoole_coroutine_system, statvfs)
     add_assoc_long(return_value, "namemax", _stat.f_namemax);
 }
 
-PHP_FUNCTION(swoole_coroutine_exec)
+PHP_METHOD(swoole_coroutine_system, exec)
 {
     char *command;
     size_t command_len;
@@ -714,7 +797,7 @@ PHP_FUNCTION(swoole_coroutine_exec)
         RETURN_FALSE;
     }
 
-    swSetNonBlock(fd);
+    swSocket_set_nonblock(fd);
     Socket socket(fd, SW_SOCK_UNIX_STREAM);
     while (1)
     {
