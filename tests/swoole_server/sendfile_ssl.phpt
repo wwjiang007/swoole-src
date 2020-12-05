@@ -1,12 +1,15 @@
 --TEST--
 swoole_server: sendfile with SSL
 --SKIPIF--
-<?php require __DIR__ . '/../include/skipif.inc'; ?>
+<?php
+require __DIR__ . '/../include/skipif.inc';
+skip_if_extension_not_exist('sockets');
+?>
 --FILE--
 <?php
 require __DIR__ . '/../include/bootstrap.php';
 
-$pm = new ProcessManager;
+$pm = new SwooleTest\ProcessManager;
 
 $pm->parentFunc = function ($pid) use ($pm) {
     $client = new swoole_client(SWOOLE_SOCK_TCP | SWOOLE_SSL, SWOOLE_SOCK_SYNC); //同步阻塞
@@ -44,14 +47,14 @@ $pm->childFunc = function () use ($pm) {
     $serv->set([
         //'log_file' => '/dev/null',
         'kernel_socket_send_buffer_size' => 65536,
-        'ssl_cert_file' => dirname(__DIR__) . '/include/api/swoole_http_server/localhost-ssl/server.crt',
-        'ssl_key_file' => dirname(__DIR__) . '/include/api/swoole_http_server/localhost-ssl/server.key',
+        'ssl_cert_file' => SSL_FILE_DIR.'/server.crt',
+        'ssl_key_file' => SSL_FILE_DIR.'/server.key',
     ]);
     $serv->on("workerStart", function ($serv) use ($pm) {
         $pm->wakeup();
     });
     $serv->on('connect', function (swoole_server $serv, $fd) {
-        $serv->sendfile($fd, TEST_IMAGE);
+        Assert::true($serv->sendfile($fd, TEST_IMAGE));
     });
     $serv->on('receive', function ($serv, $fd, $reactor_id, $data) {
 

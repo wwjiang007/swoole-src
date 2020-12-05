@@ -19,7 +19,7 @@ class HttpServer
 
         $config = [
             // 输出限制
-            "buffer_output_size" => 1024 * 1024 * 1024,
+            "output_buffer_size" => 1024 * 1024 * 1024,
             "max_connection" => 10240,
             "pipe_buffer_size" => 1024 * 1024 * 1024,
             // 'enable_port_reuse' => true,
@@ -44,10 +44,9 @@ class HttpServer
             */
         ];
 
-        if ($ssl)
-        {
-            $config['ssl_cert_file'] = __DIR__ . '/localhost-ssl/server.crt';
-            $config['ssl_key_file'] = __DIR__ . '/localhost-ssl/server.key';
+        if ($ssl) {
+            $config['ssl_cert_file'] = SSL_FILE_DIR . '/server.crt';
+            $config['ssl_key_file'] = SSL_FILE_DIR . '/server.key';
         }
         $this->httpServ->set($config);
     }
@@ -67,10 +66,6 @@ class HttpServer
 
         $this->httpServ->on('close', [$this, 'onClose']);
 
-        $sock = $this->httpServ->getSocket();
-        if (!socket_set_option($sock, SOL_SOCKET, SO_REUSEADDR, 1)) {
-            echo 'Unable to set option on socket: '. socket_strerror(socket_last_error()) . PHP_EOL;
-        }
         $this->httpServ->start();
     }
 

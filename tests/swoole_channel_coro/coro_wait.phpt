@@ -1,7 +1,9 @@
 --TEST--
 swoole_channel_coro: coroutine wait
 --SKIPIF--
-<?php require __DIR__ . '/../include/skipif.inc'; ?>
+<?php require __DIR__ . '/../include/skipif.inc';
+skip_if_offline();
+?>
 --FILE--
 <?php
 require __DIR__ . '/../include/bootstrap.php';
@@ -52,7 +54,7 @@ $pm->childFunc = function () use ($pm)
         });
 
         go(function () use ($chan) {
-            $cli = new Swoole\Coroutine\Http\Client('www.163.com', 80);
+            $cli = new Swoole\Coroutine\Http\Client('www.163.com', 443, true);
             $cli->set(['timeout' => 10]);
             $cli->setHeaders([
                 'Host' => "www.163.com",

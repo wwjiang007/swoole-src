@@ -5,10 +5,13 @@ swoole_server: bug_11000_01
 --FILE--
 <?php
 require __DIR__ . '/../include/bootstrap.php';
-$pm = new ProcessManager();
+use Swoole\Server;
+
+$pm = new SwooleTest\ProcessManager;
+
 $pm->childFunc = function () {
     $port = get_one_free_port();
-    $serv = new \swoole_server(TCP_SERVER_HOST, $port);
+    $serv = new Server(TCP_SERVER_HOST, $port);
     $process = new \Swoole\Process(function ($process) use ($serv) {
         usleep(10000);
         var_dump($serv->stats());
@@ -23,7 +26,7 @@ $pm->childFirst();
 $pm->run();
 ?>
 --EXPECTF--
-array(11) {
+array(13) {
   ["start_time"]=>
   int(%d)
   ["connection_num"]=>
@@ -36,9 +39,13 @@ array(11) {
   int(2)
   ["idle_worker_num"]=>
   int(2)
+  ["task_worker_num"]=>
+  int(0)
   ["tasking_num"]=>
   int(0)
   ["request_count"]=>
+  int(0)
+  ["dispatch_count"]=>
   int(0)
   ["worker_request_count"]=>
   int(0)
