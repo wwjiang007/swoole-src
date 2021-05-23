@@ -125,6 +125,7 @@ static PHP_METHOD(swoole_process_pool, set);
 static PHP_METHOD(swoole_process_pool, on);
 static PHP_METHOD(swoole_process_pool, listen);
 static PHP_METHOD(swoole_process_pool, write);
+static PHP_METHOD(swoole_process_pool, detach);
 static PHP_METHOD(swoole_process_pool, getProcess);
 static PHP_METHOD(swoole_process_pool, start);
 static PHP_METHOD(swoole_process_pool, shutdown);
@@ -174,6 +175,7 @@ static const zend_function_entry swoole_process_pool_methods[] =
     PHP_ME(swoole_process_pool, getProcess, arginfo_swoole_process_pool_getProcess, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process_pool, listen, arginfo_swoole_process_pool_listen, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process_pool, write, arginfo_swoole_process_pool_write, ZEND_ACC_PUBLIC)
+    PHP_ME(swoole_process_pool, detach, arginfo_swoole_process_pool_void, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process_pool, start, arginfo_swoole_process_pool_void, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_process_pool, shutdown, arginfo_swoole_process_pool_void, ZEND_ACC_PUBLIC)
     PHP_FE_END
@@ -266,6 +268,9 @@ static void pool_signal_handler(int sig) {
         current_pool->reloading = true;
         current_pool->reload_init = false;
         break;
+    case SIGIO:
+        current_pool->read_message = true;
+        break;
     default:
         break;
     }
@@ -307,7 +312,8 @@ static PHP_METHOD(swoole_process_pool, __construct) {
     }
 
     ProcessPool *pool = (ProcessPool *) emalloc(sizeof(*pool));
-    if (ProcessPool::create(pool, worker_num, (key_t) msgq_key, ipc_type) < 0) {
+    *pool = {};
+    if (pool->create(worker_num, (key_t) msgq_key, (swIPC_type) ipc_type) < 0) {
         zend_throw_exception_ex(swoole_exception_ce, errno, "failed to create process pool");
         efree(pool);
         RETURN_FALSE;
@@ -450,9 +456,9 @@ static PHP_METHOD(swoole_process_pool, listen) {
     int ret;
     // unix socket
     if (SW_STRCASECT(host, l_host, "unix:/")) {
-        ret = pool->create_unix_socket(host + 5, backlog);
+        ret = pool->listen(host + 5, backlog);
     } else {
-        ret = pool->create_tcp_socket(host, port, backlog);
+        ret = pool->listen(host, port, backlog);
     }
     pool->stream_info_->socket->set_fd_option(0, 1);
 
@@ -496,6 +502,7 @@ static PHP_METHOD(swoole_process_pool, start) {
     ori_handlers[SIGTERM] = swSignal_set(SIGTERM, pool_signal_handler);
     ori_handlers[SIGUSR1] = swSignal_set(SIGUSR1, pool_signal_handler);
     ori_handlers[SIGUSR2] = swSignal_set(SIGUSR2, pool_signal_handler);
+    ori_handlers[SIGIO] = swSignal_set(SIGIO, pool_signal_handler);
 
     if (pool->ipc_mode == SW_IPC_NONE || pp->enable_coroutine) {
         if (pp->onWorkerStart == nullptr) {
@@ -540,6 +547,13 @@ static PHP_METHOD(swoole_process_pool, start) {
 }
 
 extern void php_swoole_process_set_worker(zval *zobject, Worker *worker);
+
+static PHP_METHOD(swoole_process_pool, detach) {
+    if (current_pool == nullptr) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(current_pool->detach());
+}
 
 static PHP_METHOD(swoole_process_pool, getProcess) {
     long worker_id = -1;

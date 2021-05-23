@@ -17,16 +17,16 @@
 #include "php_swoole_cxx.h"
 #include "php_swoole_http.h"
 
+#include "swoole_string.h"
+#include "swoole_protocol.h"
+#include "swoole_socket.h"
 #include "swoole_util.h"
 
 #ifdef SW_USE_HTTP2
 
-#include "swoole_http.h"
 #include "swoole_http2.h"
 
 #define HTTP2_CLIENT_HOST_HEADER_INDEX 3
-
-#include <vector>
 
 using namespace swoole;
 using swoole::coroutine::Socket;
@@ -119,10 +119,10 @@ class Client {
     }
 
     inline bool is_available() {
-        if (sw_unlikely(!client)) {
+        if (sw_unlikely(!client || !client->is_connected())) {
             swoole_set_last_error(SW_ERROR_CLIENT_NO_CONNECTION);
             zend_update_property_long(
-                swoole_http2_client_coro_ce, SW_Z8_OBJ_P(zobject), ZEND_STRL("errCode"), ECONNRESET);
+                swoole_http2_client_coro_ce, SW_Z8_OBJ_P(zobject), ZEND_STRL("errCode"), SW_ERROR_CLIENT_NO_CONNECTION);
             zend_update_property_string(swoole_http2_client_coro_ce,
                                         SW_Z8_OBJ_P(zobject),
                                         ZEND_STRL("errMsg"),
@@ -919,7 +919,7 @@ int Client::parse_header(Stream *stream, int flags, char *in, size_t inlen) {
         inlen -= (size_t) rv;
 
         swTraceLog(SW_TRACE_HTTP2,
-                   "[" SW_ECHO_GREEN "] %.*s[%d]: %.*s[%d]",
+                   "[" SW_ECHO_GREEN "] %.*s[%lu]: %.*s[%lu]",
                    "HEADER",
                    (int) nv.namelen,
                    nv.name,
@@ -1297,7 +1297,7 @@ bool Client::send_goaway_frame(zend_long error_code, const char *debug_data, siz
         memcpy(frame + SW_HTTP2_FRAME_HEADER_SIZE + SW_HTTP2_GOAWAY_SIZE, debug_data, debug_data_len);
     }
     swTraceLog(SW_TRACE_HTTP2,
-               "[" SW_ECHO_GREEN "] Send: last-sid=%d, error-code=%d",
+               "[" SW_ECHO_GREEN "] Send: last-sid=%u, error-code=%ld",
                swHttp2_get_type(SW_HTTP2_TYPE_GOAWAY),
                last_stream_id,
                error_code);

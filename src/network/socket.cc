@@ -16,7 +16,6 @@
 
 #include "swoole_socket.h"
 
-#include <assert.h>
 #include <memory>
 
 #include "swoole_api.h"
@@ -120,6 +119,26 @@ int Socket::sendfile_blocking(const char *filename, off_t offset, size_t length,
         }
     }
     return SW_OK;
+}
+
+ssize_t Socket::writev_blocking(const struct iovec *iov, size_t iovcnt) {
+    while (1) {
+        ssize_t n = writev(iov, iovcnt);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            } else if (catch_error(errno) == SW_WAIT &&
+                       wait_event((int) (send_timeout_ * 1000), SW_EVENT_WRITE) == SW_OK) {
+                continue;
+            } else {
+                swSysWarn("send %lu bytes failed", iov[1].iov_len);
+                return SW_ERR;
+            }
+        } else {
+            return n;
+        }
+    }
+    return -1;
 }
 
 /**
@@ -532,7 +551,7 @@ int Socket::handle_sendfile() {
         ret = ::swoole_sendfile(fd, task->file.get_fd(), &task->offset, sendn);
     }
 
-    swTrace("ret=%d|task->offset=%ld|sendn=%d|filesize=%ld", ret, (long) task->offset, sendn, task->length);
+    swTrace("ret=%d|task->offset=%ld|sendn=%lu|filesize=%lu", ret, (long) task->offset, sendn, task->length);
 
     if (ret <= 0) {
         switch (catch_error(errno)) {
@@ -726,6 +745,14 @@ ssize_t Socket::send(const void *__buf, size_t __n, int __flags) {
     return retval;
 }
 
+ssize_t Socket::send_async(const void *__buf, size_t __n) {
+    if (!swoole_event_is_available()) {
+        return send_blocking(__buf, __n);
+    } else {
+        return swoole_event_write(this, __buf, __n);
+    }
+}
+
 ssize_t Socket::readv(IOVector *io_vector) {
     ssize_t retval;
 
@@ -743,6 +770,7 @@ ssize_t Socket::readv(IOVector *io_vector) {
 
     return retval;
 }
+
 ssize_t Socket::writev(IOVector *io_vector) {
     ssize_t retval;
 
@@ -944,6 +972,56 @@ X509 *Socket::ssl_get_peer_certificate() {
     return SSL_get_peer_certificate(ssl);
 }
 
+STACK_OF(X509) *Socket::ssl_get_peer_cert_chain() {
+    if (!ssl) {
+        return NULL;
+    }
+    return SSL_get_peer_cert_chain(ssl);
+}
+
+static int _ssl_read_x509_file(X509 *cert, char *buffer, size_t length) {
+    long len;
+    BIO *bio = BIO_new(BIO_s_mem());
+    ON_SCOPE_EXIT {
+        BIO_free(bio);
+    };
+
+    if (bio == nullptr) {
+        swWarn("BIO_new() failed");
+        return -1;
+    }
+
+    if (PEM_write_bio_X509(bio, cert) == 0) {
+        swWarn("PEM_write_bio_X509() failed");
+        return -1;
+    }
+
+    len = BIO_pending(bio);
+    if (len < 0 && len > (long) length) {
+        swWarn("certificate length[%ld] is too big", len);
+        return -1;
+    }
+    return BIO_read(bio, buffer, len);
+}
+
+std::vector<std::string> Socket::ssl_get_peer_cert_chain(int limit) {
+    std::vector<std::string> list;
+    STACK_OF(X509) *chain = ssl_get_peer_cert_chain();
+    if (chain == nullptr) {
+        return list;
+    }
+    auto n = sk_X509_num(chain);
+    n = std::min(n, limit);
+    SW_LOOP_N(n) {
+        X509 *cert = sk_X509_value(chain, i);
+        auto n = _ssl_read_x509_file(cert, sw_tg_buffer()->str, sw_tg_buffer()->size);
+        if (n > 0) {
+            list.emplace_back(sw_tg_buffer()->str, n);
+        }
+    }
+    return list;
+}
+
 bool Socket::ssl_get_peer_certificate(String *buf) {
     int n = ssl_get_peer_certificate(buf->str, buf->size);
     if (n < 0) {
@@ -955,47 +1033,22 @@ bool Socket::ssl_get_peer_certificate(String *buf) {
 }
 
 int Socket::ssl_get_peer_certificate(char *buffer, size_t length) {
-    long len;
-    BIO *bio;
-    X509 *cert;
-    int n;
-
-    cert = ssl_get_peer_certificate();
+    X509 *cert = ssl_get_peer_certificate();
     if (cert == nullptr) {
         return SW_ERR;
     }
+    ON_SCOPE_EXIT {
+        if (cert) {
+            X509_free(cert);
+        }
+    };
+    return _ssl_read_x509_file(cert, buffer, length);
+}
 
-    bio = BIO_new(BIO_s_mem());
-    if (bio == nullptr) {
-        swWarn("BIO_new() failed");
-        X509_free(cert);
-        return SW_ERR;
-    }
-
-    if (PEM_write_bio_X509(bio, cert) == 0) {
-        swWarn("PEM_write_bio_X509() failed");
-        goto _failed;
-    }
-
-    len = BIO_pending(bio);
-    if (len < 0 && len > (long) length) {
-        swWarn("certificate length[%ld] is too big", len);
-        goto _failed;
-    }
-
-    n = BIO_read(bio, buffer, len);
-
-    BIO_free(bio);
-    X509_free(cert);
-
-    return n;
-
-_failed:
-
-    BIO_free(bio);
-    X509_free(cert);
-
-    return SW_ERR;
+const char *Socket::ssl_get_error_reason(int *reason) {
+    int error = ERR_get_error();
+    *reason = ERR_GET_REASON(error);
+    return ERR_reason_error_string(error);
 }
 
 enum swReturn_code Socket::ssl_accept() {
@@ -1033,9 +1086,8 @@ enum swReturn_code Socket::ssl_accept() {
         ssl_want_write = 1;
         return SW_WAIT;
     } else if (err == SSL_ERROR_SSL) {
-        int error = ERR_get_error();
-        int reason = ERR_GET_REASON(error);
-        const char *error_string = ERR_reason_error_string(error);
+        int reason;
+        const char *error_string = ssl_get_error_reason(&reason);
         swWarn(
             "bad SSL client[%s:%d], reason=%d, error_string=%s", info.get_ip(), info.get_port(), reason, error_string);
         return SW_ERROR;
@@ -1091,7 +1143,8 @@ int Socket::ssl_connect() {
 
     long err_code = ERR_get_error();
     char *msg = ERR_error_string(err_code, sw_tg_buffer()->str);
-    swWarn("SSL_connect(fd=%d) failed. Error: %s[%ld|%d]", fd, msg, err, ERR_GET_REASON(err_code));
+    swNotice("Socket::ssl_connect(fd=%d) to server[%s:%d] failed. Error: %s[%ld|%d]", fd, info.get_ip(), info.get_port(), msg,
+           err, ERR_GET_REASON(err_code));
 
     return SW_ERR;
 }
@@ -1110,7 +1163,7 @@ int Socket::ssl_sendfile(const File &fp, off_t *_offset, size_t _size) {
         } else {
             *_offset += ret;
         }
-        swTraceLog(SW_TRACE_REACTOR, "fd=%d, readn=%d, n=%d, ret=%d", fd, readn, n, ret);
+        swTraceLog(SW_TRACE_REACTOR, "fd=%d, readn=%ld, n=%ld, ret=%ld", fd, readn, n, ret);
         return ret;
     } else {
         swSysWarn("pread() failed");
@@ -1118,20 +1171,13 @@ int Socket::ssl_sendfile(const File &fp, off_t *_offset, size_t _size) {
     }
 }
 
-void Socket::ssl_close() {
-    int n, sslerr, err;
-
-    if (SSL_in_init(ssl)) {
-        /*
-         * OpenSSL 1.0.2f complains if SSL_shutdown() is called during
-         * an SSL handshake, while previous versions always return 0.
-         * Avoid calling SSL_shutdown() if handshake wasn't completed.
-         */
-        SSL_free(ssl);
-        ssl = nullptr;
-        return;
+bool Socket::ssl_shutdown() {
+    if (ssl_closed_) {
+        return false;
     }
-
+    if (SSL_in_init(ssl)) {
+        return false;
+    }
     /**
      * If the peer close first, local should be set to quiet mode and do not send any data,
      * otherwise the peer will send RST segment.
@@ -1141,15 +1187,13 @@ void Socket::ssl_close() {
     }
 
     int mode = SSL_get_shutdown(ssl);
-
     SSL_set_shutdown(ssl, mode | SSL_RECEIVED_SHUTDOWN | SSL_SENT_SHUTDOWN);
 
-    n = SSL_shutdown(ssl);
-
+    int n = SSL_shutdown(ssl);
+    ssl_closed_ = 1;
     swTrace("SSL_shutdown: %d", n);
 
-    sslerr = 0;
-
+    int sslerr = 0;
     /* before 0.9.8m SSL_shutdown() returned 0 instead of -1 on errors */
     if (n != 1 && ERR_peek_error()) {
         sslerr = SSL_get_error(ssl, n);
@@ -1157,10 +1201,24 @@ void Socket::ssl_close() {
     }
 
     if (!(n == 1 || sslerr == 0 || sslerr == SSL_ERROR_ZERO_RETURN)) {
-        err = (sslerr == SSL_ERROR_SYSCALL) ? errno : 0;
-        swWarn("SSL_shutdown() failed. Error: %d:%d", sslerr, err);
+        int reason;
+        const char *error_string = ssl_get_error_reason(&reason);
+        swWarn("SSL_shutdown() failed, reason=%d, error_string=%s", reason, error_string);
+        return false;
     }
 
+    return true;
+}
+
+void Socket::ssl_close() {
+    /*
+     * OpenSSL 1.0.2f complains if SSL_shutdown() is called during
+     * an SSL handshake, while previous versions always return 0.
+     * Avoid calling SSL_shutdown() if handshake wasn't completed.
+     */
+    if (!ssl_closed_) {
+        ssl_shutdown();
+    }
     SSL_free(ssl);
     ssl = nullptr;
 }

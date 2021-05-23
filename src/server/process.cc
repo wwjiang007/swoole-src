@@ -22,11 +22,11 @@ namespace swoole {
 
 using network::Socket;
 
-typedef int (*send_func_t)(Server *, PipeBuffer *, size_t, void *);
+typedef int (*SendFunc)(Server *serv, DataHead *head, const iovec *iov, size_t iovcnt, void *private_data);
 
-static bool process_send_packet(Server *serv, PipeBuffer *buf, SendData *resp, send_func_t _send, void *private_data);
-static int process_sendto_worker(Server *serv, PipeBuffer *buf, size_t n, void *private_data);
-static int process_sendto_reactor(Server *serv, PipeBuffer *buf, size_t n, void *private_data);
+static bool process_send_packet(Server *serv, SendData *resp, SendFunc _send, void *private_data);
+static int process_sendto_worker(Server *serv, DataHead *head, const iovec *iov, size_t iovcnt, void *private_data);
+static int process_sendto_reactor(Server *serv, DataHead *head, const iovec *iov, size_t iovcnt, void *private_data);
 
 ProcessFactory::ProcessFactory(Server *server) : Factory(server) {
     send_buffer = nullptr;
@@ -52,18 +52,20 @@ bool ProcessFactory::shutdown() {
 }
 
 ProcessFactory::~ProcessFactory() {
-    SW_LOOP_N(server_->reactor_num) {
-        sw_free(server_->pipe_buffers[i]);
+    if (server_->pipe_buffers) {
+        SW_LOOP_N(server_->reactor_num) {
+            sw_free(server_->pipe_buffers[i]);
+        }
+        sw_free(server_->pipe_buffers);
     }
-    sw_free(server_->pipe_buffers);
-
     if (server_->stream_socket_file) {
         unlink(server_->stream_socket_file);
         sw_free(server_->stream_socket_file);
         server_->stream_socket->free();
     }
-
-    sw_free(send_buffer);
+    if (send_buffer) {
+        sw_free(send_buffer);
+    }
 }
 
 bool ProcessFactory::start() {
@@ -135,12 +137,12 @@ bool ProcessFactory::notify(DataHead *ev) {
     return dispatch(&task);
 }
 
-static inline int process_sendto_worker(Server *serv, PipeBuffer *buf, size_t n, void *private_data) {
-    return serv->send_to_worker_from_master((Worker *) private_data, buf, n);
+static inline int process_sendto_worker(Server *serv, DataHead *head, const iovec *iov, size_t iovcnt, void *private_data) {
+    return serv->send_to_worker_from_master((Worker *) private_data, iov, iovcnt);
 }
 
-static inline int process_sendto_reactor(Server *serv, PipeBuffer *buf, size_t n, void *private_data) {
-    return serv->send_to_reactor_thread((EventData *) buf, n, ((Connection *) private_data)->session_id);
+static inline int process_sendto_reactor(Server *serv, DataHead *head, const iovec *iov, size_t iovcnt, void *private_data) {
+    return serv->send_to_reactor_thread(head, iov, iovcnt, ((Connection *) private_data)->session_id);
 }
 
 /**
@@ -183,24 +185,15 @@ bool ProcessFactory::dispatch(SendData *task) {
 
     Worker *worker = server_->get_worker(target_worker_id);
 
-    // without data
-    if (task->data == nullptr) {
-        task->info.flags = 0;
-        return server_->send_to_worker_from_master(worker, &task->info, sizeof(task->info));
-    }
-
     if (task->info.type == SW_SERVER_EVENT_RECV_DATA) {
         worker->dispatch_count++;
         server_->gs->dispatch_count++;
     }
 
-    /**
-     * Multi-Threads
-     */
-    PipeBuffer *buf = server_->pipe_buffers[SwooleTG.id];
-    buf->info = task->info;
+    SendData _task;
+    memcpy(&_task, task, sizeof(SendData));
 
-    return process_send_packet(server_, buf, task, process_sendto_worker, worker);
+    return process_send_packet(server_, &_task, process_sendto_worker, worker);
 }
 
 /**
@@ -208,20 +201,34 @@ bool ProcessFactory::dispatch(SendData *task) {
  *  If the data sent is larger than Server::ipc_max_size, then it is sent in chunks. Otherwise send it directly。
  * @return: send success returns SW_OK, send failure returns SW_ERR.
  */
-static bool process_send_packet(Server *serv, PipeBuffer *buf, SendData *resp, send_func_t _send, void *private_data) {
+static bool process_send_packet(Server *serv, SendData *resp, SendFunc _send, void *private_data) {
     const char *data = resp->data;
     uint32_t send_n = resp->info.len;
     off_t offset = 0;
     uint32_t copy_n;
 
-    uint32_t max_length = serv->ipc_max_size - sizeof(buf->info);
+    struct iovec iov[2];
+
+    uint32_t max_length = serv->ipc_max_size - sizeof(resp->info);
+    resp->info.msg_id = serv->worker_msg_id.fetch_add(1);
 
     if (send_n <= max_length) {
-        buf->info.flags = 0;
-        buf->info.len = send_n;
-        memcpy(buf->data, data, send_n);
+        resp->info.flags = 0;
+        resp->info.len = send_n;
 
-        int retval = _send(serv, buf, sizeof(buf->info) + send_n, private_data);
+        size_t iovcnt;
+        iov[0].iov_base = &resp->info;
+        iov[0].iov_len = sizeof(resp->info);
+
+        if (resp->data) {
+            iov[1].iov_base = (void *) resp->data;
+            iov[1].iov_len = send_n;
+            iovcnt = 2;
+        } else {
+            iovcnt = 1;
+        }
+
+        int retval = _send(serv, &resp->info, iov, iovcnt, private_data);
 #ifdef __linux__
         if (retval < 0 && errno == ENOBUFS) {
             max_length = SW_IPC_BUFFER_SIZE;
@@ -234,22 +241,25 @@ static bool process_send_packet(Server *serv, PipeBuffer *buf, SendData *resp, s
 #ifdef __linux__
 _ipc_use_chunk:
 #endif
-    buf->info.flags = SW_EVENT_DATA_CHUNK;
-    buf->info.len = send_n;
+    resp->info.flags = SW_EVENT_DATA_CHUNK | SW_EVENT_DATA_BEGIN;
+    resp->info.len = send_n;
 
     while (send_n > 0) {
         if (send_n > max_length) {
             copy_n = max_length;
         } else {
-            buf->info.flags |= SW_EVENT_DATA_END;
+            resp->info.flags |= SW_EVENT_DATA_END;
             copy_n = send_n;
         }
 
-        memcpy(buf->data, data + offset, copy_n);
+        iov[0].iov_base = &resp->info;
+        iov[0].iov_len = sizeof(resp->info);
+        iov[1].iov_base = (void *) (data + offset);
+        iov[1].iov_len = copy_n;
 
-        swTrace("finish, type=%d|len=%d", buf->info.type, copy_n);
+        swTrace("finish, type=%d|len=%u", resp->info.type, copy_n);
 
-        if (_send(serv, buf, sizeof(buf->info) + copy_n, private_data) < 0) {
+        if (_send(serv, &resp->info, iov, 2, private_data) < 0) {
 #ifdef __linux__
             if (errno == ENOBUFS && max_length > SW_BUFFER_SIZE_STD) {
                 max_length = SW_IPC_BUFFER_SIZE;
@@ -257,6 +267,10 @@ _ipc_use_chunk:
             }
 #endif
             return false;
+        }
+
+        if (resp->info.flags & SW_EVENT_DATA_BEGIN) {
+            resp->info.flags &= ~SW_EVENT_DATA_BEGIN;
         }
 
         send_n -= copy_n;
@@ -332,25 +346,24 @@ bool ProcessFactory::finish(SendData *resp) {
         if (swoole_event_write(server_->last_stream_socket, &resp->info, sizeof(resp->info)) < 0) {
             return false;
         }
-        if (swoole_event_write(server_->last_stream_socket, resp->data, _len) < 0) {
+        if (_len > 0 && swoole_event_write(server_->last_stream_socket, resp->data, _len) < 0) {
             return false;
         }
         return true;
     }
 
-    PipeBuffer *buf = send_buffer;
+    SendData task;
+    memcpy(&task, resp, sizeof(SendData));
+    task.info.fd = session_id;
+    task.info.reactor_id = conn->reactor_id;
+    task.info.server_fd = SwooleG.process_id;
 
-    buf->info.fd = session_id;
-    buf->info.type = resp->info.type;
-    buf->info.reactor_id = conn->reactor_id;
-    buf->info.server_fd = SwooleG.process_id;
+    swTrace("worker_id=%d, type=%d", SwooleG.process_id, task.info.type);
 
-    swTrace("worker_id=%d, type=%d", SwooleG.process_id, buf->info.type);
-
-    return process_send_packet(server_, buf, resp, process_sendto_reactor, conn);
+    return process_send_packet(server_, &task, process_sendto_reactor, conn);
 }
 
-bool ProcessFactory::end(SessionId session_id) {
+bool ProcessFactory::end(SessionId session_id, int flags) {
     SendData _send{};
     DataHead info{};
 
@@ -358,7 +371,52 @@ bool ProcessFactory::end(SessionId session_id) {
     _send.info.len = 0;
     _send.info.type = SW_SERVER_EVENT_CLOSE;
 
-    Connection *conn = server_->get_connection_by_session_id(session_id);
+    Connection *conn = server_->get_connection_verify_no_ssl(session_id);
+    if (!conn) {
+        swoole_error_log(SW_LOG_NOTICE, SW_ERROR_SESSION_NOT_EXIST, "session[%ld] is closed", session_id);
+        return false;
+    }
+    // Reset send buffer, Immediately close the connection.
+    if (flags & Server::CLOSE_RESET) {
+        conn->close_reset = 1;
+    }
+    // Server is initiative to close the connection
+    if (flags & Server::CLOSE_ACTIVELY) {
+        conn->close_actively = 1;
+    }
+
+    swTraceLog(SW_TRACE_CLOSE, "session_id=%ld, fd=%d", session_id, conn->fd);
+
+    Worker *worker;
+    DataHead ev = {};
+
+    /**
+     * Only active shutdown needs to determine whether it is in the process of connection binding
+     */
+    if (conn->close_actively) {
+        /**
+         * The worker process is not currently bound to this connection,
+         * and needs to be forwarded to the correct worker process
+         */
+        if (server_->is_hash_dispatch_mode()) {
+            int worker_id = server_->schedule_worker(conn->fd, nullptr);
+            if (worker_id != (int) SwooleG.process_id) {
+                worker = server_->get_worker(worker_id);
+                goto _notify;
+            } else {
+                goto _close;
+            }
+        } else if (!server_->is_worker()) {
+            worker = server_->get_worker(conn->fd % server_->worker_num);
+        _notify:
+            ev.type = SW_SERVER_EVENT_CLOSE;
+            ev.fd = session_id;
+            ev.reactor_id = conn->reactor_id;
+            return server_->send_to_worker_from_worker(worker, &ev, sizeof(ev), SW_PIPE_MASTER) > 0;
+        }
+    }
+
+    _close:
     if (conn == nullptr || conn->active == 0) {
         swoole_set_last_error(SW_ERROR_SESSION_NOT_EXIST);
         return false;

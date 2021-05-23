@@ -23,24 +23,20 @@ using namespace swoole;
 static inline void php_swoole_table_row2array(Table *table, TableRow *row, zval *return_value) {
     array_init(return_value);
 
-    TableStringLength vlen = 0;
-    double dval = 0;
-    long lval = 0;
-
     for (auto i = table->column_list->begin(); i != table->column_list->end(); i++) {
         TableColumn *col = *i;
         if (col->type == TableColumn::TYPE_STRING) {
-            memcpy(&vlen, row->data + col->index, sizeof(TableStringLength));
-            add_assoc_stringl_ex(return_value,
-                                 col->name.c_str(),
-                                 col->name.length(),
-                                 row->data + col->index + sizeof(TableStringLength),
-                                 vlen);
+            TableStringLength len = 0;
+            char *str = nullptr;
+            row->get_value(col, &str, &len);
+            add_assoc_stringl_ex(return_value, col->name.c_str(), col->name.length(), str, len);
         } else if (col->type == TableColumn::TYPE_FLOAT) {
-            memcpy(&dval, row->data + col->index, sizeof(dval));
+            double dval = 0;
+            row->get_value(col, &dval);
             add_assoc_double_ex(return_value, col->name.c_str(), col->name.length(), dval);
         } else if (col->type == TableColumn::TYPE_INT) {
-            memcpy(&lval, row->data + col->index, sizeof(lval));
+            long lval = 0;
+            row->get_value(col, &lval);
             add_assoc_long_ex(return_value, col->name.c_str(), col->name.length(), lval);
         } else {
             abort();
@@ -50,23 +46,23 @@ static inline void php_swoole_table_row2array(Table *table, TableRow *row, zval 
 
 static inline void php_swoole_table_get_field_value(
     Table *table, TableRow *row, zval *return_value, char *field, uint16_t field_len) {
-    TableStringLength vlen = 0;
-    double dval = 0;
-    long lval = 0;
-
     TableColumn *col = table->get_column(std::string(field, field_len));
     if (!col) {
         ZVAL_FALSE(return_value);
         return;
     }
     if (col->type == TableColumn::TYPE_STRING) {
-        memcpy(&vlen, row->data + col->index, sizeof(TableStringLength));
-        ZVAL_STRINGL(return_value, row->data + col->index + sizeof(TableStringLength), vlen);
+        TableStringLength len = 0;
+        char *str = nullptr;
+        row->get_value(col, &str, &len);
+        ZVAL_STRINGL(return_value, str, len);
     } else if (col->type == TableColumn::TYPE_FLOAT) {
-        memcpy(&dval, row->data + col->index, sizeof(dval));
+        double dval = 0;
+        row->get_value(col, &dval);
         ZVAL_DOUBLE(return_value, dval);
     } else if (col->type == TableColumn::TYPE_INT) {
-        memcpy(&lval, row->data + col->index, sizeof(lval));
+        long lval = 0;
+        row->get_value(col, &lval);
         ZVAL_LONG(return_value, lval);
     } else {
         abort();
@@ -113,6 +109,10 @@ static void inline php_swoole_table_set_ptr(zval *zobject, Table *ptr) {
 }
 
 static inline void php_swoole_table_free_object(zend_object *object) {
+    Table *table = php_swoole_table_fetch_object(object)->ptr;
+    if (table) {
+        table->free();
+    }
     zend_object_std_dtor(object);
 }
 
@@ -351,7 +351,7 @@ PHP_METHOD(swoole_table, __construct) {
         RETURN_FALSE;
     }
     table->set_hash_func([](const char *key, size_t len) -> uint64_t {
-        return zend_string_hash_val(sw_get_zend_string((void *) key));
+        return zend_string_hash_val(zend::fetch_zend_string_by_val((void *) key));
     });
     php_swoole_table_set_ptr(ZEND_THIS, table);
 }
@@ -515,7 +515,7 @@ static PHP_METHOD(swoole_table, incr) {
     }
 
     if (out_flags & SW_TABLE_FLAG_NEW_ROW) {
-        column->clear(row);
+        table->clear_row(row);
     }
 
     if (column->type == TableColumn::TYPE_STRING) {
@@ -575,7 +575,7 @@ static PHP_METHOD(swoole_table, decr) {
     }
 
     if (out_flags & SW_TABLE_FLAG_NEW_ROW) {
-        column->clear(row);
+        table->clear_row(row);
     }
 
     if (column->type == TableColumn::TYPE_STRING) {

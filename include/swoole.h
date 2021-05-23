@@ -17,9 +17,9 @@
 
 #pragma once
 
-#if defined(HAVE_CONFIG_H) && !defined(COMPILE_DL_SWOOLE)
+#ifdef HAVE_CONFIG_H
 #include "config.h"
-#elif defined(PHP_ATOM_INC) || defined(ZEND_SIGNALS)
+#elif defined(ENABLE_PHP_SWOOLE)
 #include "php_config.h"
 #endif
 
@@ -35,10 +35,15 @@
 #define _GNU_SOURCE
 #endif
 
+#ifndef _PTHREAD_PSHARED
+#define _PTHREAD_PSHARED
+#endif
+
 /*--- C standard library ---*/
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -126,6 +131,7 @@ typedef unsigned long ulong_t;
 #define SW_MAX(A, B) ((A) > (B) ? (A) : (B))
 #define SW_MIN(A, B) ((A) < (B) ? (A) : (B))
 #define SW_LOOP_N(n) for (decltype(n) i = 0; i < n; i++)
+#define SW_LOOP for (;;)
 
 #ifndef MAX
 #define MAX(A, B) SW_MAX(A, B)
@@ -179,6 +185,10 @@ namespace network {
 struct Socket;
 struct Address;
 }  // namespace network
+class AsyncThreads;
+namespace async {
+class ThreadPool;
+}
 struct Protocol;
 struct EventData;
 struct DataHead;
@@ -343,6 +353,7 @@ enum swReturn_code {
     SW_CLOSE    = 3,
     SW_ERROR    = 4,
     SW_READY    = 5,
+    SW_INVALID  = 6,
 };
 
 enum swFd_type {
@@ -390,6 +401,7 @@ enum swSocket_type {
     SW_SOCK_UDP6        = 4,
     SW_SOCK_UNIX_STREAM = 5,  // unix sock stream
     SW_SOCK_UNIX_DGRAM  = 6,  // unix sock dgram
+    SW_SOCK_RAW         = 7,
 };
 
 enum swEvent_type {
@@ -442,9 +454,10 @@ enum swEventData_flag {
     SW_EVENT_DATA_NORMAL,
     SW_EVENT_DATA_PTR     = 1u << 1,
     SW_EVENT_DATA_CHUNK   = 1u << 2,
-    SW_EVENT_DATA_END     = 1u << 3,
-    SW_EVENT_DATA_OBJ_PTR = 1u << 4,
-    SW_EVENT_DATA_POP_PTR = 1u << 5,
+    SW_EVENT_DATA_BEGIN   = 1u << 3,
+    SW_EVENT_DATA_END     = 1u << 4,
+    SW_EVENT_DATA_OBJ_PTR = 1u << 5,
+    SW_EVENT_DATA_POP_PTR = 1u << 6,
 };
 
 #define swTask_type(task) ((task)->info.server_fd)
@@ -528,7 +541,7 @@ int swoole_set_cpu_affinity(cpu_set_t *set);
 #ifdef HAVE_CLOCK_GETTIME
 #define swoole_clock_gettime     clock_gettime
 #else
-int swoole_clock_gettime(clock_id_t which_clock, struct timespec *t);
+int swoole_clock_gettime(int which_clock, struct timespec *t);
 #endif
 
 static inline struct timespec swoole_time_until(int milliseconds) {
@@ -560,9 +573,11 @@ struct Event {
 
 typedef long SessionId;
 typedef long TaskId;
+typedef uint8_t ReactorId;
 
 struct DataHead {
     SessionId fd;
+    uint64_t msg_id;
     uint32_t len;
     int16_t reactor_id;
     uint8_t type;
@@ -587,12 +602,7 @@ struct ThreadGlobal {
     String *buffer_stack;
     Reactor *reactor;
     Timer *timer;
-    uint8_t aio_init;
-    uint8_t aio_schedule;
-    uint32_t aio_task_num;
-    Pipe *aio_pipe;
-    network::Socket *aio_read_socket;
-    network::Socket *aio_write_socket;
+    AsyncThreads *async_threads;
     uint32_t signal_listener_num;
     uint32_t co_signal_listener_num;
     int error;
@@ -655,7 +665,7 @@ std::string dirname(const std::string &file);
 int hook_add(void **hooks, int type, const Callback &func, int push_back);
 void hook_call(void **hooks, int type, void *arg);
 double microtime(void);
-}
+}  // namespace swoole
 
 extern swoole::Global SwooleG;                  // Local Global Variable
 extern __thread swoole::ThreadGlobal SwooleTG;  // Thread Global Variable
@@ -708,7 +718,7 @@ static sw_inline void sw_spinlock(sw_atomic_t *lock) {
 }
 
 static sw_inline swoole::String *sw_tg_buffer() {
-   return SwooleTG.buffer_stack;
+    return SwooleTG.buffer_stack;
 }
 
 static sw_inline swoole::MemoryPool *sw_mem_pool() {

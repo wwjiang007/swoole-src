@@ -17,10 +17,8 @@
 #include "swoole_server.h"
 #include "swoole_memory.h"
 #include "swoole_hash.h"
-#include "swoole_http.h"
 #include "swoole_client.h"
 #include "swoole_util.h"
-#include "swoole_websocket.h"
 
 #include <assert.h>
 
@@ -275,7 +273,7 @@ int Server::close_connection(Reactor *reactor, Socket *socket) {
         int find_max_fd = fd - 1;
         swTrace("set_maxfd=%d|close_fd=%d\n", find_max_fd, fd);
         // find the new max_fd
-        for (; serv->is_valid_connection(serv->get_connection(find_max_fd)) && find_max_fd > serv->get_minfd();
+        for (; !serv->is_valid_connection(serv->get_connection(find_max_fd)) && find_max_fd > serv->get_minfd();
              find_max_fd--) {
             // pass
         }
@@ -411,7 +409,7 @@ static int ReactorThread_onPipeRead(Reactor *reactor, Event *ev) {
                     ReactorThread_shutdown(reactor);
                 } else if (resp->info.type == SW_SERVER_EVENT_CLOSE_FORCE) {
                     SessionId session_id = resp->info.fd;
-                    Connection *conn = serv->get_connection_verify(session_id);
+                    Connection *conn = serv->get_connection_verify_no_ssl(session_id);
 
                     if (!conn) {
                         swoole_error_log(SW_LOG_NOTICE,
@@ -424,6 +422,16 @@ static int ReactorThread_onPipeRead(Reactor *reactor, Event *ev) {
                     if (serv->disable_notify || conn->close_force) {
                         return Server::close_connection(reactor, conn->socket);
                     }
+
+#ifdef SW_USE_OPENSSL
+                    /**
+                     * SSL connections that have not completed the handshake,
+                     * do not need to notify the workers, just close
+                     */
+                    if (conn->ssl && !conn->ssl_ready) {
+                        return Server::close_connection(reactor, conn->socket);
+                    }
+#endif
 
                     conn->close_force = 1;
                     Event _ev = {};
@@ -447,13 +455,13 @@ static int ReactorThread_onPipeRead(Reactor *reactor, Event *ev) {
     return SW_OK;
 }
 
-ssize_t Server::send_to_worker_from_master(Worker *worker, const void *data, size_t len) {
+ssize_t Server::send_to_worker_from_master(Worker *worker, const iovec *iov, size_t iovcnt) {
     if (SwooleTG.reactor) {
         ReactorThread *thread = get_thread(SwooleTG.id);
         Socket *socket = &thread->pipe_sockets[worker->pipe_master->fd];
-        return swoole_event_write(socket, data, len);
+        return swoole_event_writev(socket, iov, iovcnt);
     } else {
-        return worker->pipe_master->send_blocking(data, len);
+        return worker->pipe_master->writev_blocking(iov, iovcnt);
     }
 }
 
@@ -470,7 +478,7 @@ static int ReactorThread_onPipeWrite(Reactor *reactor, Event *ev) {
         BufferChunk *chunk = buffer->front();
         EventData *send_data = (EventData *) chunk->value.ptr;
 
-        // server active close, discard data.
+        // server actively closed connection, should discard the data
         if (Server::is_stream_event(send_data->info.type)) {
             // send_data->info.fd is session_id
             Connection *conn = serv->get_connection_verify(send_data->info.fd);
@@ -640,9 +648,7 @@ static int ReactorThread_onWrite(Reactor *reactor, Event *ev) {
     while (!Buffer::empty(socket->out_buffer)) {
         BufferChunk *chunk = socket->out_buffer->front();
         if (chunk->type == BufferChunk::TYPE_CLOSE) {
-        _close_fd:
-            reactor->close(reactor, socket);
-            return SW_OK;
+            return reactor->close(reactor, socket);
         } else if (chunk->type == BufferChunk::TYPE_SENDFILE) {
             ret = socket->handle_sendfile();
         } else {
@@ -655,7 +661,7 @@ static int ReactorThread_onWrite(Reactor *reactor, Event *ev) {
         if (ret < 0) {
             if (socket->close_wait) {
                 conn->close_errno = errno;
-                goto _close_fd;
+                return reactor->trigger_close_event(ev);
             } else if (socket->send_wait) {
                 break;
             }
@@ -822,7 +828,7 @@ static int ReactorThread_init(Server *serv, Reactor *reactor, uint16_t reactor_i
     reactor->close = Server::close_connection;
 
     reactor->set_exit_condition(Reactor::EXIT_CONDITION_DEFAULT, [thread](Reactor *reactor, int &event_num) -> bool {
-        return reactor->event_num == thread->pipe_num;
+        return event_num == (int) thread->pipe_num;
     });
 
     reactor->default_error_handler = ReactorThread_onClose;

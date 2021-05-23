@@ -22,23 +22,15 @@
 
 #include <sys/stat.h>
 #include <sys/resource.h>
-#include <sys/ioctl.h>
-
-#ifdef HAVE_EXECINFO
-#include <execinfo.h>
-#endif
 
 #ifdef __MACH__
 #include <sys/syslimits.h>
 #endif
 
-#include <regex>
 #include <algorithm>
 #include <list>
 #include <set>
 #include <unordered_map>
-#include <thread>
-#include <sstream>
 
 #include "swoole_api.h"
 #include "swoole_string.h"
@@ -56,6 +48,10 @@ using swoole::String;
 #include <sys/random.h>
 #else
 static ssize_t getrandom(void *buffer, size_t size, unsigned int __flags) {
+#ifdef HAVE_ARC4RANDOM
+    arc4random_buf(buffer, size);
+    return size;
+#else
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) {
         return -1;
@@ -73,6 +69,7 @@ static ssize_t getrandom(void *buffer, size_t size, unsigned int __flags) {
     close(fd);
 
     return read_bytes;
+#endif
 }
 #endif
 
@@ -258,11 +255,8 @@ pid_t swoole_fork(int flags) {
         if (swoole_coroutine_is_in()) {
             swFatalError(SW_ERROR_OPERATION_NOT_SUPPORT, "must be forked outside the coroutine");
         }
-        if (SwooleTG.aio_init) {
-            printf("aio_init=%d, aio_task_num=%d, reactor=%p\n",
-                   SwooleTG.aio_init,
-                   SwooleTG.aio_task_num,
-                   SwooleTG.reactor);
+        if (SwooleTG.async_threads) {
+            swTrace("aio_task_num=%d, reactor=%p", SwooleTG.async_threads->task_num, sw_reactor());
             swFatalError(SW_ERROR_OPERATION_NOT_SUPPORT, "can not create server after using async file operation");
         }
     }
@@ -279,7 +273,7 @@ pid_t swoole_fork(int flags) {
         /**
          * [!!!] All timers and event loops must be cleaned up after fork
          */
-        if (SwooleTG.timer) {
+        if (swoole_timer_is_available()) {
             swoole_timer_free();
         }
         if (SwooleG.memory_pool) {
@@ -291,7 +285,7 @@ pid_t swoole_fork(int flags) {
             // reopen log file
             sw_logger()->reopen();
             // reset eventLoop
-            if (SwooleTG.reactor) {
+            if (swoole_event_is_available()) {
                 swoole_event_free();
                 swTraceLog(SW_TRACE_REACTOR, "reactor has been destroyed");
             }
@@ -746,6 +740,7 @@ void swoole_print_backtrace(void) {
     std::cout << boost::stacktrace::stacktrace();
 }
 #elif defined(HAVE_EXECINFO)
+#include <execinfo.h>
 void swoole_print_backtrace(void) {
     int size = 16;
     void *array[16];

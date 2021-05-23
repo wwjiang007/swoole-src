@@ -39,6 +39,12 @@
 #define SOCK_NONBLOCK O_NONBLOCK
 #endif
 
+#ifdef __sun
+#define s6_addr8 _S6_un._S6_u8
+#define s6_addr16 _S6_un._S6_u16
+#define s6_addr32 _S6_un._S6_u32
+#endif
+
 // OS Feature
 #if defined(HAVE_KQUEUE) || !defined(HAVE_SENDFILE)
 int swoole_sendfile(int out_fd, int in_fd, off_t *offset, size_t size);
@@ -117,8 +123,17 @@ struct IOVector {
     ~IOVector();
 
     void update_iterator(ssize_t __n);
+
     inline struct iovec *get_iterator() {
         return iov_iterator;
+    }
+
+    size_t length() {
+        size_t len = 0;
+        SW_LOOP_N(count) {
+            len += iov[i].iov_len;
+        }
+        return len;
     }
 
     inline int get_remain_count() {
@@ -159,6 +174,7 @@ struct Socket {
     uchar ssl_renegotiation : 1;
     uchar ssl_handshake_buffer_set : 1;
     uchar ssl_quiet_shutdown : 1;
+    uchar ssl_closed_ : 1;
 #ifdef SW_SUPPORT_DTLS
     uchar dtls : 1;
 #endif
@@ -172,9 +188,7 @@ struct Socket {
     uchar recv_wait : 1;
     uchar event_hup : 1;
 
-    /**
-     * memory buffer size;
-     */
+    // memory buffer size [user space]
     uint32_t buffer_size;
     uint32_t chunk_size;
 
@@ -202,14 +216,14 @@ struct Socket {
     size_t total_recv_bytes;
     size_t total_send_bytes;
 
-    /**
-     * for reactor
-     */
+    // for reactor
     int handle_send();
     int handle_sendfile();
-    /**
-     * socket option
-     */
+    // user space memory buffer
+    void set_memory_buffer_size(uint32_t _buffer_size) {
+        buffer_size = _buffer_size;
+    }
+    // socket option [kernel buffer]
     bool set_buffer_size(uint32_t _buffer_size);
     bool set_recv_buffer_size(uint32_t _buffer_size);
     bool set_send_buffer_size(uint32_t _buffer_size);
@@ -306,6 +320,10 @@ struct Socket {
     ssize_t readv(IOVector *io_vector);
     ssize_t writev(IOVector *io_vector);
 
+    ssize_t writev(const struct iovec *iov, size_t iovcnt) {
+        return ::writev(fd, iov, iovcnt);
+    }
+
     int bind(const Address &sa) {
         return ::bind(fd, &sa.addr.ss, sizeof(sa.addr.ss));
     }
@@ -316,8 +334,10 @@ struct Socket {
 
     void clean();
     ssize_t send_blocking(const void *__data, size_t __len);
+    ssize_t send_async(const void *__data, size_t __len);
     ssize_t recv_blocking(void *__data, size_t __len, int flags);
     int sendfile_blocking(const char *filename, off_t offset, size_t length, double timeout);
+    ssize_t writev_blocking(const struct iovec *iov, size_t iovcnt);
 
     inline int connect(const Address &sa) {
         return ::connect(fd, &sa.addr.ss, sa.len);
@@ -347,13 +367,17 @@ struct Socket {
     ssize_t ssl_readv(IOVector *io_vector);
     ssize_t ssl_writev(IOVector *io_vector);
     int ssl_sendfile(const File &fp, off_t *offset, size_t size);
+    STACK_OF(X509) *ssl_get_peer_cert_chain();
+    std::vector<std::string> ssl_get_peer_cert_chain(int limit);
     X509 *ssl_get_peer_certificate();
     int ssl_get_peer_certificate(char *buf, size_t n);
     bool ssl_get_peer_certificate(String *buf);
     bool ssl_verify(bool allow_self_signed);
     bool ssl_check_host(const char *tls_host_name);
     void ssl_catch_error();
+    bool ssl_shutdown();
     void ssl_close();
+    const char *ssl_get_error_reason(int *reason);
 #endif
 
     inline ssize_t recvfrom(char *__buf, size_t __len, int flags, Address *sa) {
@@ -394,6 +418,14 @@ struct Socket {
             return false;
         }
         return true;
+    }
+
+    bool isset_readable_event() {
+        return events & SW_EVENT_READ;
+    }
+
+    bool isset_writable_event() {
+        return events & SW_EVENT_WRITE;
     }
 
     int wait_event(int timeout_ms, int events);
@@ -446,7 +478,7 @@ struct Socket {
     ssize_t sendto_blocking(const Address &dst_addr, const void *__buf, size_t __n, int flags = 0);
     ssize_t recvfrom_blocking(char *__buf, size_t __len, int flags, Address *sa);
 
-    inline ssize_t sendto(const char *dst_host, int dst_port, const void *data, size_t len, int flags = 0) {
+    inline ssize_t sendto(const char *dst_host, int dst_port, const void *data, size_t len, int flags = 0) const {
         Address addr = {};
         if (!addr.assign(socket_type, dst_host, dst_port)) {
             return SW_ERR;
@@ -454,20 +486,20 @@ struct Socket {
         return sendto(addr, data, len, flags);
     }
 
-    inline ssize_t sendto(const Address &dst_addr, const void *data, size_t len, int flags) {
+    inline ssize_t sendto(const Address &dst_addr, const void *data, size_t len, int flags) const {
         return ::sendto(fd, data, len, flags, &dst_addr.addr.ss, dst_addr.len);
     }
 
-    inline int catch_error(int err) {
+    inline int catch_error(int err) const {
         switch (err) {
         case EFAULT:
             abort();
             return SW_ERROR;
         case EBADF:
+        case ENOENT:
+            return SW_INVALID;
         case ECONNRESET:
-#ifdef __CYGWIN__
         case ECONNABORTED:
-#endif
         case EPIPE:
         case ENOTCONN:
         case ETIMEDOUT:
@@ -480,6 +512,9 @@ struct Socket {
         case SW_ERROR_SSL_RESET:
             return SW_CLOSE;
         case EAGAIN:
+#if EAGAIN != EWOULDBLOCK
+        case EWOULDBLOCK:
+#endif
 #ifdef HAVE_KQUEUE
         case ENOBUFS:
 #endif

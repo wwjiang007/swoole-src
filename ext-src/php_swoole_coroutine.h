@@ -35,6 +35,7 @@
 
 SW_EXTERN_C_BEGIN
 PHP_METHOD(swoole_coroutine_scheduler, set);
+PHP_METHOD(swoole_coroutine_scheduler, getOptions);
 SW_EXTERN_C_END
 
 namespace zend {
@@ -95,7 +96,10 @@ class PHPCoroutine {
         uint64_t max_num;
         uint32_t hook_flags;
         bool enable_preemptive_scheduler;
+        bool enable_deadlock_check;
     };
+
+    static zend_array *options;
 
     enum HookType {
         HOOK_NONE              = 0,
@@ -112,20 +116,25 @@ class PHPCoroutine {
         HOOK_CURL              = 1u << 11,
         HOOK_NATIVE_CURL       = 1u << 12,
         HOOK_BLOCKING_FUNCTION = 1u << 13,
-        HOOK_SOCKETS           = 1u << 14, // sockets extension
+        HOOK_SOCKETS           = 1u << 14,
+        HOOK_STDIO             = 1u << 15,
+#ifdef SW_USE_CURL
+        HOOK_ALL               = 0x7fffffff ^ HOOK_CURL,
+#else
         HOOK_ALL               = 0x7fffffff ^ HOOK_NATIVE_CURL,
+#endif
     };
 
     static const uint8_t MAX_EXEC_MSEC = 10;
     static void init();
-    static void deactivate(void *ptr);
     static void shutdown();
     static long create(zend_fcall_info_cache *fci_cache, uint32_t argc, zval *argv);
     static void defer(zend::Function *fci);
-
+    static void deadlock_check();
     static bool enable_hook(uint32_t flags);
     static bool disable_hook();
     static void disable_unsafe_function();
+    static void enable_unsafe_function();
 
     static void interrupt_thread_stop();
 
@@ -134,7 +143,7 @@ class PHPCoroutine {
     static void resume_m(FutureTask *task, zval *retval);
 
     static inline long get_cid() {
-        return sw_likely(active) ? Coroutine::get_current_cid() : -1;
+        return sw_likely(activated) ? Coroutine::get_current_cid() : -1;
     }
 
     static inline long get_pcid(long cid = 0) {
@@ -143,7 +152,7 @@ class PHPCoroutine {
     }
 
     static inline long get_elapsed(long cid = 0) {
-        return sw_likely(active) ? Coroutine::get_elapsed(cid) : -1;
+        return sw_likely(activated) ? Coroutine::get_elapsed(cid) : -1;
     }
 
     static inline PHPContext *get_context() {
@@ -168,6 +177,10 @@ class PHPCoroutine {
         config.max_num = n;
     }
 
+    static inline void set_deadlock_check(bool value = true) {
+        config.enable_deadlock_check = value;
+    }
+
     static inline bool is_schedulable(PHPContext *task) {
         return task->enable_scheduler && (Timer::get_absolute_msec() - task->last_msec > MAX_EXEC_MSEC);
     }
@@ -190,8 +203,10 @@ class PHPCoroutine {
         return false;
     }
 
-    static inline void set_hook_flags(uint32_t flags) {
-        config.hook_flags = flags;
+    static void set_hook_flags(uint32_t flags);
+
+    static inline uint32_t get_hook_flags() {
+        return config.hook_flags;
     }
 
     static inline void enable_preemptive_scheduler(bool value) {
@@ -199,11 +214,11 @@ class PHPCoroutine {
     }
 
     static inline bool is_activated() {
-        return active;
+        return activated;
     }
 
   protected:
-    static bool active;
+    static bool activated;
     static PHPContext main_task;
     static Config config;
 
@@ -211,6 +226,7 @@ class PHPCoroutine {
     static std::thread interrupt_thread;
 
     static void activate();
+    static void deactivate(void *ptr);
 
     static inline void vm_stack_init(void);
     static inline void vm_stack_destroy(void);

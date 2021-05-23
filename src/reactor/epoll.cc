@@ -18,8 +18,6 @@
 #include "swoole_socket.h"
 #include "swoole_reactor.h"
 
-#include <unordered_map>
-
 #define EVENT_DEBUG 0
 
 #ifdef HAVE_EPOLL
@@ -62,7 +60,6 @@ class ReactorEpoll : public ReactorImpl {
             events |= EPOLLONESHOT;
         }
         if (Reactor::isset_error_event(fdtype)) {
-            // flag |= (EPOLLRDHUP);
             events |= (EPOLLRDHUP | EPOLLHUP | EPOLLERR);
         }
         return events;
@@ -70,6 +67,7 @@ class ReactorEpoll : public ReactorImpl {
 };
 
 #if EVENT_DEBUG
+#include <unordered_map>
 static thread_local std::unordered_map<int, Socket *> event_map;
 
 Socket *swoole_event_map_get(int sockfd) {
@@ -122,7 +120,7 @@ int ReactorEpoll::add(Socket *socket, int events) {
 
     reactor_->_add(socket, events);
     swTraceLog(
-        SW_TRACE_EVENT, "add events[fd=%d#%d, type=%d, events=%d]", socket->fd, reactor_->id, socket->fd_type, events_);
+        SW_TRACE_EVENT, "add events[fd=%d#%d, type=%d, events=%d]", socket->fd, reactor_->id, socket->fd_type, events);
 
     return SW_OK;
 }
@@ -165,7 +163,7 @@ int ReactorEpoll::set(Socket *socket, int events) {
         return SW_ERR;
     }
 
-    swTraceLog(SW_TRACE_EVENT, "set event[reactor_id=%d, fd=%d, events=%d]", reactor_->id, socket->fd, events_);
+    swTraceLog(SW_TRACE_EVENT, "set event[reactor_id=%d, fd=%d, events=%d]", reactor_->id, socket->fd, events);
     reactor_->_set(socket, events);
 
     return SW_OK;

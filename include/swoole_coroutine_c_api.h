@@ -27,6 +27,7 @@ extern "C" {
 #include <sys/wait.h>
 #include <sys/statvfs.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <netdb.h>
 #include <poll.h>
 #include <dirent.h>
@@ -56,6 +57,18 @@ int swoole_coroutine_flock(int fd, int operation);
 int swoole_coroutine_flock_ex(const char *filename, int fd, int operation);
 int swoole_coroutine_statvfs(const char *path, struct statvfs *buf);
 /**
+ * stdio
+ */
+FILE *swoole_coroutine_fopen(const char *pathname, const char *mode);
+FILE *swoole_coroutine_fdopen(int fd, const char *mode);
+FILE *swoole_coroutine_freopen(const char *pathname, const char *mode, FILE *stream);
+size_t swoole_coroutine_fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
+size_t swoole_coroutine_fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
+char *swoole_coroutine_fgets(char *s, int size, FILE *stream);
+int swoole_coroutine_fputs(const char *s, FILE *stream);
+int swoole_coroutine_feof(FILE *stream);
+int swoole_coroutine_fclose(FILE *stream);
+/**
  * dir
  */
 DIR *swoole_coroutine_opendir(const char *name);
@@ -65,6 +78,8 @@ int swoole_coroutine_closedir(DIR *dirp);
  * socket
  */
 int swoole_coroutine_socket(int domain, int type, int protocol);
+int swoole_coroutine_socket_create(int fd);
+uint8_t swoole_coroutine_socket_exists(int fd);
 ssize_t swoole_coroutine_send(int sockfd, const void *buf, size_t len, int flags);
 ssize_t swoole_coroutine_sendmsg(int sockfd, const struct msghdr *msg, int flags);
 ssize_t swoole_coroutine_recv(int sockfd, void *buf, size_t len, int flags);

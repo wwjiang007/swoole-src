@@ -29,8 +29,6 @@ using swoole::Socks5Proxy;
 using swoole::HttpProxy;
 using swoole::String;
 
-#include "ext/standard/basic_functions.h"
-
 struct ClientCallback {
     zend_fcall_info_cache cache_onConnect;
     zend_fcall_info_cache cache_onReceive;
@@ -139,15 +137,27 @@ static int client_select_wait(zval *sock_array, fd_set *fds);
 
 static sw_inline Client *client_get_ptr(zval *zobject) {
     Client *cli = php_swoole_client_get_cli(zobject);
-    if (cli && cli->socket && cli->active == 1) {
-        return cli;
-    } else {
-        swoole_set_last_error(SW_ERROR_CLIENT_NO_CONNECTION);
-        zend_update_property_long(
-            swoole_client_ce, SW_Z8_OBJ_P(zobject), ZEND_STRL("errCode"), swoole_get_last_error());
-        php_swoole_error(E_WARNING, "client is not connected to server");
-        return nullptr;
+    if (cli && cli->socket) {
+        if (cli->active) {
+            return cli;
+        }
+        if (cli->async_connect) {
+            cli->async_connect = false;
+            int error = -1;
+            if (cli->get_socket()->get_option(SOL_SOCKET, SO_ERROR, &error) == 0) {
+                if (error == 0) {
+                    cli->active = 1;
+                    return cli;
+                }
+            }
+            php_swoole_client_free(zobject, cli);
+        }
     }
+    swoole_set_last_error(SW_ERROR_CLIENT_NO_CONNECTION);
+    zend_update_property_long(
+        swoole_client_ce, SW_Z8_OBJ_P(zobject), ZEND_STRL("errCode"), swoole_get_last_error());
+    php_swoole_error(E_WARNING, "client is not connected to server");
+    return nullptr;
 }
 
 // clang-format off
@@ -809,16 +819,19 @@ static PHP_METHOD(swoole_client, connect) {
         }
     }
 
-    // nonblock async
     if (cli->connect(cli, host, port, timeout, sock_flag) < 0) {
+        zend_update_property_long(
+            swoole_client_ce, SW_Z8_OBJ_P(ZEND_THIS), ZEND_STRL("errCode"), swoole_get_last_error());
+        // async connect
+        if (cli->async_connect) {
+            RETURN_TRUE;
+        }
         php_swoole_error(E_WARNING,
                          "connect to server[%s:%d] failed. Error: %s[%d]",
                          host,
                          (int) port,
                          swoole_strerror(swoole_get_last_error()),
                          swoole_get_last_error());
-        zend_update_property_long(
-            swoole_client_ce, SW_Z8_OBJ_P(ZEND_THIS), ZEND_STRL("errCode"), swoole_get_last_error());
         php_swoole_client_free(ZEND_THIS, cli);
         RETURN_FALSE;
     }
@@ -1043,7 +1056,7 @@ static PHP_METHOD(swoole_client, recv) {
                     buffer->length = 0;
                 }
 
-                sw_set_zend_string(return_value, buffer->str, eof);
+                zend::assign_zend_string_by_val(return_value, buffer->str, eof);
                 buffer->str = nullptr;
                 delete buffer;
 
@@ -1197,7 +1210,12 @@ static PHP_METHOD(swoole_client, getsockname) {
         }
     } else {
         add_assoc_long(return_value, "port", ntohs(cli->socket->info.addr.inet_v4.sin_port));
-        add_assoc_string(return_value, "host", inet_ntoa(cli->socket->info.addr.inet_v4.sin_addr));
+        char tmp[INET_ADDRSTRLEN];
+        if (inet_ntop(AF_INET, &cli->socket->info.addr.inet_v4.sin_addr, tmp, sizeof(tmp))) {
+            add_assoc_string(return_value, "host", tmp);
+        } else {
+            php_swoole_fatal_error(E_WARNING, "inet_ntop() failed");
+        }
     }
 }
 
@@ -1235,7 +1253,13 @@ static PHP_METHOD(swoole_client, getpeername) {
     if (cli->socket->socket_type == SW_SOCK_UDP) {
         array_init(return_value);
         add_assoc_long(return_value, "port", ntohs(cli->remote_addr.addr.inet_v4.sin_port));
-        add_assoc_string(return_value, "host", inet_ntoa(cli->remote_addr.addr.inet_v4.sin_addr));
+        char tmp[INET_ADDRSTRLEN];
+
+        if (inet_ntop(AF_INET, &cli->remote_addr.addr.inet_v4.sin_addr, tmp, sizeof(tmp))) {
+            add_assoc_string(return_value, "host", tmp);
+        } else {
+            php_swoole_fatal_error(E_WARNING, "inet_ntop() failed");
+        }
     } else if (cli->socket->socket_type == SW_SOCK_UDP6) {
         array_init(return_value);
         add_assoc_long(return_value, "port", ntohs(cli->remote_addr.addr.inet_v6.sin6_port));

@@ -89,17 +89,43 @@ bool BaseFactory::notify(DataHead *info) {
     return server_->accept_task((EventData *) info) == SW_OK;
 }
 
-bool BaseFactory::end(SessionId session_id) {
+bool BaseFactory::end(SessionId session_id, int flags) {
     SendData _send{};
     _send.info.fd = session_id;
     _send.info.len = 0;
     _send.info.type = SW_SERVER_EVENT_CLOSE;
+    _send.info.reactor_id = SwooleG.process_id;
 
-    Connection *conn = server_->get_connection_by_session_id(session_id);
-    if (conn == nullptr || conn->active == 0) {
+    Session *session = server_->get_session(session_id);
+    if (!session->fd) {
+        swoole_error_log(SW_LOG_NOTICE, SW_ERROR_SESSION_NOT_EXIST,
+                            "failed to close connection, session#%ld does not exist", session_id);
+        return false;
+    }
+
+    if (session->reactor_id != SwooleG.process_id) {
+        Worker *worker = server_->get_worker(session->reactor_id);
+        if (worker->pipe_master->send_async((const char*) &_send.info, sizeof(_send.info)) < 0) {
+            swSysWarn("failed to send %lu bytes to pipe_master", sizeof(_send.info));
+            return false;
+        }
+        return true;
+    }
+
+    Connection *conn = server_->get_connection_verify_no_ssl(session_id);
+    if (conn == nullptr) {
         swoole_set_last_error(SW_ERROR_SESSION_NOT_EXIST);
         return false;
-    } else if (conn->close_force) {
+    } 
+    // Reset send buffer, Immediately close the connection.
+    if (flags & Server::CLOSE_RESET) {
+        conn->close_reset = 1;
+    }
+    // Server is initiative to close the connection
+    if (flags & Server::CLOSE_ACTIVELY) {
+        conn->close_actively = 1;
+    }
+    if (conn->close_force) {
         goto _do_close;
     } else if (conn->closing) {
         swWarn("session#%ld is closing", session_id);
@@ -141,14 +167,6 @@ bool BaseFactory::end(SessionId session_id) {
     }
 }
 
-static int send_func(network::Socket *socket, const void *data, size_t length) {
-    if (!swoole_event_is_available()) {
-        return socket->send_blocking(data, length);
-    } else {
-        return swoole_event_write(socket, data, length);
-    }
-}
-
 bool BaseFactory::finish(SendData *data) {
     SessionId session_id = data->info.fd;
 
@@ -176,15 +194,18 @@ bool BaseFactory::finish(SendData *data) {
                 memcpy(proxy_msg.data, data->data + offset, proxy_msg.info.len);
                 send_n -= proxy_msg.info.len;
                 offset += proxy_msg.info.len;
-                send_func(worker->pipe_master, (const char *) &proxy_msg, sizeof(proxy_msg.info) + proxy_msg.info.len);
+                size_t __len =  sizeof(proxy_msg.info) + proxy_msg.info.len;
+                if (worker->pipe_master->send_async((const char*) &proxy_msg, __len) < 0) {
+                    swSysWarn("failed to send %lu bytes to pipe_master", __len);
+                    return false;
+                }
             }
-
             swTrace("proxy message, fd=%d, len=%ld", worker->pipe_master, sizeof(proxy_msg.info) + proxy_msg.info.len);
         } else if (data->info.type == SW_SERVER_EVENT_SEND_FILE) {
             memcpy(&proxy_msg.info, &data->info, sizeof(proxy_msg.info));
             memcpy(proxy_msg.data, data->data, data->info.len);
-            return send_func(
-                worker->pipe_master, (const char *) &proxy_msg, sizeof(proxy_msg.info) + proxy_msg.info.len);
+            size_t __len =  sizeof(proxy_msg.info) + proxy_msg.info.len;
+            return worker->pipe_master->send_async((const char*) &proxy_msg, __len);
         } else {
             swWarn("unkown event type[%d]", data->info.type);
             return false;

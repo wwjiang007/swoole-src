@@ -3,8 +3,10 @@
 # Swoole
 
 [![Latest Version](https://img.shields.io/github/release/swoole/swoole-src.svg)](https://github.com/swoole/swoole-src/releases)
-[![Build Status](https://api.travis-ci.org/swoole/swoole-src.svg)](https://travis-ci.org/swoole/swoole-src)
 [![License](https://img.shields.io/badge/license-apache2-blue.svg)](LICENSE)
+[![lib-swoole](https://github.com/swoole/swoole-src/workflows/lib-swoole/badge.svg)](https://github.com/swoole/swoole-src/actions?query=workflow%3Alib-swoole)
+[![ext-swoole](https://github.com/swoole/swoole-src/workflows/ext-swoole/badge.svg)](https://github.com/swoole/swoole-src/actions?query=workflow%3Aext-swoole)
+[![test-linux](https://github.com/swoole/swoole-src/workflows/test-linux/badge.svg)](https://github.com/swoole/swoole-src/actions?query=workflow%3Atest-linux)
 [![Coverity Scan Build Status](https://scan.coverity.com/projects/11654/badge.svg)](https://scan.coverity.com/projects/swoole-swoole-src)
 [![codecov](https://codecov.io/gh/swoole/swoole-src/branch/master/graph/badge.svg)](https://codecov.io/gh/swoole/swoole-src)
 
@@ -443,7 +445,7 @@ echo 'use ' . (microtime(true) - $s) . ' s';
 ### 编译需求
 
 + Linux, OS X 系统 或 CygWin, WSL
-+ PHP 7.0.0 或以上版本 (版本越高性能越好)
++ PHP 7.2.0 或以上版本 (版本越高性能越好)
 + GCC 4.8 及以上
 
 ### 1. 使用PHP官方的PECL工具安装 (初学者)
@@ -475,13 +477,15 @@ make && sudo make install
 + `--enable-sockets`
 + `--enable-http2`
 + `--enable-mysqlnd` (需要 mysqlnd, 只是为了支持`mysql->escape`方法)
++ `--enable-swoole-json`
++ `--enable-swoole-curl`
 
 ### 升级
 
 >  ⚠️ 如果你要从源码升级, 别忘记在源码目录执行 `make clean`
 
 1. `pecl upgrade swoole`
-2. `git pull && cd swoole-src && make clean && make && sudo make install`
+2. `cd swoole-src && git pull && make clean && make && sudo make install`
 3. 如果你改变了PHP版本, 请重新执行 `phpize clean && phpize`后重新编译
 
 ## 💎 框架 & 组件
@@ -499,6 +503,7 @@ make && sudo make install
 + __中文文档__: <https://wiki.swoole.com>
 + __Document__: <https://www.swoole.co.uk/docs>
 + __IDE Helper & API__: <https://github.com/swoole/ide-helper>
++ __调试工具__: <https://github.com/swoole/yasd>
 + __中文社区及QQ群__: <https://wiki.swoole.com/#/other/discussion>
 + __Twitter__: <https://twitter.com/php_swoole>
 + __Slack Group__: <https://swoole.slack.com>

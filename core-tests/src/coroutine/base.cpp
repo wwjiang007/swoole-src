@@ -23,6 +23,15 @@ TEST(coroutine_base, get_current) {
     ASSERT_EQ(cid, _cid);
 }
 
+TEST(coroutine_base, get_init_msec) {
+    Coroutine::create([](void *arg) {
+        auto co = Coroutine::get_current();
+        long init_msec = co->get_init_msec();
+
+        ASSERT_GT(init_msec, 0);
+    });
+}
+
 TEST(coroutine_base, yield_resume) {
     long _cid;
     long cid = Coroutine::create(
@@ -149,4 +158,23 @@ TEST(coroutine_base, count) {
 TEST(coroutine_base, get_peak_num) {
     Coroutine::create(
         [](void *_arg) { Coroutine::create([](void *_arg) { ASSERT_GE(Coroutine::get_peak_num(), 2); }); });
+}
+
+TEST(coroutine_base, get_elapsed) {
+    long elapsed_time = 0;
+    Coroutine::create(
+        [](void *arg) {
+            auto co = Coroutine::get_current();
+            usleep(2000);
+            *(long *) arg = Coroutine::get_elapsed(co->get_cid());
+        },
+        &elapsed_time);
+    ASSERT_GE(elapsed_time, 2);
+}
+
+TEST(coroutine_base, run) {
+    long cid = coroutine::run([](void *ptr){
+
+    });
+    ASSERT_GE(cid, 1);
 }

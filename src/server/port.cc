@@ -166,6 +166,17 @@ int ListenPort::listen() {
     }
 #endif
 
+#ifdef SO_ACCEPTFILTER
+    if (tcp_defer_accept) {
+        struct accept_filter_arg a;
+        memset(&a, 0, sizeof(a));
+        strcpy(a.af_name, "httpready");
+        if (socket->set_option(SOL_SOCKET, SO_ACCEPTFILTER, &a, sizeof(a)) != 0) {
+            swSysWarn("setsockopt(SO_ACCEPTFILTER) failed");
+        }
+    }
+#endif
+
 #ifdef TCP_FASTOPEN
     if (tcp_fastopen) {
         if (socket->set_option(IPPROTO_TCP, TCP_FASTOPEN, tcp_fastopen) != 0) {
@@ -560,7 +571,7 @@ _parse:
             }
             request_length = request->header_length_ + request->content_length_;
             if (request_length > protocol->package_max_length) {
-                swoole_error_log(SW_LOG_TRACE,
+                swoole_error_log(SW_LOG_WARNING,
                                  SW_ERROR_HTTP_INVALID_PROTOCOL,
                                  "Request Entity Too Large: request length (chunked) has already been greater than the "
                                  "package_max_length(%u)" CLIENT_INFO_FMT,
@@ -582,7 +593,7 @@ _parse:
     } else {
         request_length = request->header_length_ + request->content_length_;
         if (request_length > protocol->package_max_length) {
-            swoole_error_log(SW_LOG_TRACE,
+            swoole_error_log(SW_LOG_WARNING,
                              SW_ERROR_HTTP_INVALID_PROTOCOL,
                              "Request Entity Too Large: header-length (%u) + content-length (%u) is greater than the "
                              "package_max_length(%u)" CLIENT_INFO_FMT,
@@ -618,7 +629,7 @@ _parse:
     if (buffer->length > request_length) {
         swoole_error_log(SW_LOG_TRACE,
                          SW_ERROR_HTTP_INVALID_PROTOCOL,
-                         "Invalid Request: %zu bytes has been disacard" CLIENT_INFO_FMT,
+                         "Invalid Request: %zu bytes has been discard" CLIENT_INFO_FMT,
                          buffer->length - request_length,
                          CLIENT_INFO_ARGS);
         buffer->length = request_length;

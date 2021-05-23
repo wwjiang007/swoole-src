@@ -23,6 +23,7 @@ Coroutine *Coroutine::current = nullptr;
 long Coroutine::last_cid = 0;
 std::unordered_map<long, Coroutine *> Coroutine::coroutines;
 uint64_t Coroutine::peak_num = 0;
+bool Coroutine::activated = false;
 
 size_t Coroutine::stack_size = SW_DEFAULT_C_STACK_SIZE;
 Coroutine::SwapCallback Coroutine::on_yield = nullptr;
@@ -30,10 +31,31 @@ Coroutine::SwapCallback Coroutine::on_resume = nullptr;
 Coroutine::SwapCallback Coroutine::on_close = nullptr;
 Coroutine::BailoutCallback Coroutine::on_bailout = nullptr;
 
+#ifdef SW_USE_THREAD_CONTEXT
+namespace coroutine {
+void thread_context_init();
+void thread_context_clean();
+}
+#endif
+
+void Coroutine::activate() {
+#ifdef SW_USE_THREAD_CONTEXT
+    coroutine::thread_context_init();
+#endif
+    activated = true;
+}
+
+void Coroutine::deactivate() {
+#ifdef SW_USE_THREAD_CONTEXT
+    coroutine::thread_context_clean();
+#endif
+    activated = false;
+}
+
 void Coroutine::yield() {
     SW_ASSERT(current == this || on_bailout != nullptr);
     state = STATE_WAITING;
-    if (sw_likely(on_yield)) {
+    if (sw_likely(on_yield && task)) {
         on_yield(task);
     }
     current = origin;
@@ -46,7 +68,7 @@ void Coroutine::resume() {
         return;
     }
     state = STATE_RUNNING;
-    if (sw_likely(on_resume)) {
+    if (sw_likely(on_resume && task)) {
         on_resume(task);
     }
     origin = current;
@@ -77,7 +99,7 @@ void Coroutine::resume_naked() {
 void Coroutine::close() {
     SW_ASSERT(current == this);
     state = STATE_END;
-    if (on_close) {
+    if (on_close && task) {
         on_close(task);
     }
 #if !defined(SW_USE_THREAD_CONTEXT) && defined(SW_CONTEXT_DETECT_STACK_USAGE)
@@ -154,8 +176,10 @@ bool run(const coroutine_func_t &fn, void *arg) {
     if (swoole_event_init(SW_EVENTLOOP_WAIT_EXIT) < 0) {
         return false;
     }
+    Coroutine::activate();
     long cid = Coroutine::create(fn, arg);
     swoole_event_wait();
+    Coroutine::deactivate();
     return cid > 0;
 }
 }  // namespace coroutine

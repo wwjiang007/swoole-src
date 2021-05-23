@@ -57,6 +57,13 @@ Table *Table::make(uint32_t rows_size, float conflict_proportion) {
     return table;
 }
 
+void Table::free() {
+    delete mutex;
+    delete iterator;
+    delete column_map;
+    delete column_list;
+}
+
 bool Table::add_column(const std::string &_name, enum TableColumn::Type _type, size_t _size) {
     if (_type < TableColumn::TYPE_INT || _type > TableColumn::TYPE_STRING) {
         swWarn("unknown column type");
@@ -417,6 +424,19 @@ void TableRow::set_value(TableColumn *col, void *value, size_t vlen) {
         }
         break;
     }
+}
+
+void TableRow::get_value(TableColumn *col, double *dval) {
+    memcpy(dval, data + col->index, sizeof(*dval));
+}
+
+void TableRow::get_value(TableColumn *col, long *lval) {
+    memcpy(lval, data + col->index, sizeof(*lval));
+}
+
+void TableRow::get_value(TableColumn *col, char **value, TableStringLength *len) {
+    memcpy(len, data + col->index, sizeof(*len));
+    *value = data + col->index + sizeof(*len);
 }
 
 }  // namespace swoole

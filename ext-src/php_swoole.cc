@@ -23,7 +23,6 @@
 #include "zend_exceptions.h"
 
 BEGIN_EXTERN_C()
-#include "ext/standard/php_var.h"
 #ifdef SW_USE_JSON
 #include "ext/json/php_json.h"
 #endif
@@ -31,7 +30,6 @@ END_EXTERN_C()
 
 #include "swoole_mime_type.h"
 #include "swoole_server.h"
-#include "swoole_client.h"
 #include "swoole_util.h"
 
 #include <netinet/in.h>
@@ -40,7 +38,7 @@ END_EXTERN_C()
 #include <ifaddrs.h>
 #include <sys/ioctl.h>
 
-#if __MACH__
+#if defined(__MACH__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <net/if_dl.h>
 #endif
 
@@ -107,9 +105,14 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_defer, 0, 0, 1)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_coroutine_socketpair, 0, 0, 3)
-    ZEND_ARG_INFO(1, domain)
-    ZEND_ARG_INFO(1, type)
-    ZEND_ARG_INFO(1, protocol)
+    ZEND_ARG_INFO(0, domain)
+    ZEND_ARG_INFO(0, type)
+    ZEND_ARG_INFO(0, protocol)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_test_kernel_coroutine, 0, 0, 0)
+    ZEND_ARG_INFO(0, count)
+    ZEND_ARG_INFO(0, sleep_time)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_client_select, 0, 0, 3)
@@ -183,6 +186,7 @@ const zend_function_entry swoole_functions[] =
     PHP_FE(swoole_coroutine_create, arginfo_swoole_coroutine_create)
     PHP_FE(swoole_coroutine_defer, arginfo_swoole_coroutine_defer)
     PHP_FE(swoole_coroutine_socketpair, arginfo_swoole_coroutine_socketpair)
+    PHP_FE(swoole_test_kernel_coroutine, arginfo_swoole_test_kernel_coroutine)
     /*------other-----*/
     PHP_FE(swoole_client_select, arginfo_swoole_client_select)
     PHP_FALIAS(swoole_select, swoole_client_select, arginfo_swoole_client_select)
@@ -210,10 +214,6 @@ const zend_function_entry swoole_functions[] =
     PHP_FE_END /* Must be the last line in swoole_functions[] */
 };
 // clang-format on
-
-#if PHP_MEMORY_DEBUG
-php_vmstat_t php_vmstat;
-#endif
 
 zend_class_entry *swoole_exception_ce;
 zend_object_handlers swoole_exception_handlers;
@@ -395,12 +395,15 @@ SW_API bool php_swoole_is_enable_coroutine() {
 
 static void fatal_error(int code, const char *format, ...) {
     va_list args;
-    zend_object *exception;
     va_start(args, format);
-    exception = zend_throw_exception(swoole_error_ce, swoole::std_string::vformat(format, args).c_str(), code);
+    zend_object *exception = zend_throw_exception(swoole_error_ce, swoole::std_string::vformat(format, args).c_str(), code);
     va_end(args);
-    zend_exception_error(exception, E_ERROR);
-    exit(255);
+
+    zend_try {
+        zend_exception_error(exception, E_ERROR);
+    } zend_catch {
+        exit(255);
+    } zend_end_try();
 }
 
 /* {{{ PHP_MINIT_FUNCTION
@@ -638,6 +641,8 @@ PHP_MINIT_FUNCTION(swoole) {
     SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_SERVER_INVALID_REQUEST", SW_ERROR_SERVER_INVALID_REQUEST);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_SERVER_CONNECT_FAIL", SW_ERROR_SERVER_CONNECT_FAIL);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_SERVER_WORKER_EXIT_TIMEOUT", SW_ERROR_SERVER_WORKER_EXIT_TIMEOUT);
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_SERVER_WORKER_ABNORMAL_PIPE_DATA", SW_ERROR_SERVER_WORKER_ABNORMAL_PIPE_DATA);
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_SERVER_WORKER_UNPROCESSED_DATA", SW_ERROR_SERVER_WORKER_UNPROCESSED_DATA);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_CO_OUT_OF_COROUTINE", SW_ERROR_CO_OUT_OF_COROUTINE);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_CO_HAS_BEEN_BOUND", SW_ERROR_CO_HAS_BEEN_BOUND);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_ERROR_CO_HAS_BEEN_DISCARDED", SW_ERROR_CO_HAS_BEEN_DISCARDED);
@@ -684,6 +689,7 @@ PHP_MINIT_FUNCTION(swoole) {
     SW_REGISTER_LONG_CONSTANT("SWOOLE_TRACE_CONTEXT", SW_TRACE_CONTEXT);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_TRACE_CO_HTTP_SERVER", SW_TRACE_CO_HTTP_SERVER);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_TRACE_TABLE", SW_TRACE_TABLE);
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_TRACE_CO_CURL", SW_TRACE_CO_CURL);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_TRACE_ALL", SW_TRACE_ALL);
 
     /**
@@ -807,15 +813,18 @@ PHP_MINFO_FUNCTION(swoole) {
     php_info_print_table_row(2, "Version", SWOOLE_VERSION);
     snprintf(buf, sizeof(buf), "%s %s", __DATE__, __TIME__);
     php_info_print_table_row(2, "Built", buf);
-    php_info_print_table_row(2, "coroutine", "enabled");
+#if defined(SW_USE_THREAD_CONTEXT)
+    php_info_print_table_row(2, "coroutine", "enabled with thread context");
+#elif defined(SW_USE_ASM_CONTEXT)
+    php_info_print_table_row(2, "coroutine", "enabled with boost asm context");
+#else
+    php_info_print_table_row(2, "coroutine", "enabled with ucontext");
+#endif
 #ifdef SW_DEBUG
     php_info_print_table_row(2, "debug", "enabled");
 #endif
 #ifdef SW_LOG_TRACE_OPEN
     php_info_print_table_row(2, "trace_log", "enabled");
-#endif
-#ifdef SW_NO_USE_ASM_CONTEXT
-    php_info_print_table_row(2, "ucontext", "enabled");
 #endif
 #ifdef HAVE_EPOLL
     php_info_print_table_row(2, "epoll", "enabled");
@@ -849,6 +858,9 @@ PHP_MINFO_FUNCTION(swoole) {
     php_info_print_table_row(2, "openssl", OPENSSL_VERSION_TEXT);
 #else
     php_info_print_table_row(2, "openssl", "enabled");
+#endif
+#ifdef SW_SUPPORT_DTLS
+    php_info_print_table_row(2, "dtls", "enabled");
 #endif
 #endif
 #ifdef SW_USE_HTTP2
@@ -935,7 +947,7 @@ static void *_sw_zend_string_calloc(size_t nmemb, size_t size) {
 }
 
 static void *_sw_zend_string_realloc(void *address, size_t size) {
-    zend_string *str = zend_string_realloc(sw_get_zend_string(address), size, 0);
+    zend_string *str = zend_string_realloc(zend::fetch_zend_string_by_val(address), size, 0);
     if (str == nullptr) {
         return nullptr;
     }
@@ -943,7 +955,7 @@ static void *_sw_zend_string_realloc(void *address, size_t size) {
 }
 
 static void _sw_zend_string_free(void *address) {
-    zend_string_free((zend_string *) (sw_get_zend_string(address)));
+    zend_string_free(zend::fetch_zend_string_by_val(address));
 }
 
 static swoole::Allocator php_allocator {
@@ -991,6 +1003,9 @@ PHP_RINIT_FUNCTION(swoole) {
     /* Disable warning even in ZEND_DEBUG because we may register our own signal handlers  */
     SIGG(check) = 0;
 #endif
+
+    php_swoole_coroutine_rinit();
+    php_swoole_runtime_rinit();
 
     SWOOLE_G(req_status) = PHP_SWOOLE_RINIT_END;
 

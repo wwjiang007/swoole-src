@@ -49,6 +49,7 @@ class Client {
     bool remove_delay = false;
     bool closed = false;
     bool high_watermark = false;
+    bool async_connect = false;
 
     /**
      * one package: length check
@@ -104,12 +105,12 @@ class Client {
     std::shared_ptr<SSLContext> ssl_context = nullptr;
 #endif
 
-    void (*onConnect)(Client *cli) = nullptr;
-    void (*onError)(Client *cli) = nullptr;
-    void (*onReceive)(Client *cli, const char *data, uint32_t length) = nullptr;
-    void (*onClose)(Client *cli) = nullptr;
-    void (*onBufferFull)(Client *cli) = nullptr;
-    void (*onBufferEmpty)(Client *cli) = nullptr;
+    std::function<void (Client *cli)> onConnect = nullptr;
+    std::function<void (Client *cli)> onError = nullptr;
+    std::function<void (Client *cli, const char *, size_t)> onReceive = nullptr;
+    std::function<void (Client *cli)> onClose = nullptr;
+    std::function<void (Client *cli)> onBufferFull = nullptr;
+    std::function<void (Client *cli)> onBufferEmpty = nullptr;
 
     int (*connect)(Client *cli, const char *host, int port, double _timeout, int sock_flag) = nullptr;
     ssize_t (*send)(Client *cli, const char *data, size_t length, int flags) = nullptr;
@@ -120,6 +121,16 @@ class Client {
     Client(enum swSocket_type type, bool async);
     ~Client();
 
+    void set_http_proxy(const std::string &host, int port) {
+        http_proxy = new swoole::HttpProxy;
+        http_proxy->proxy_host = host;
+        http_proxy->proxy_port = port;
+    }
+
+    Socket *get_socket() {
+        return socket;
+    }
+
     int sleep();
     int wakeup();
     int shutdown(int __how);
@@ -128,6 +139,9 @@ class Client {
     int socks5_handshake(const char *recv_data, size_t length);
 #ifdef SW_USE_OPENSSL
     int enable_ssl_encrypt();
+#ifdef SW_SUPPORT_DTLS
+    void enable_dtls();
+#endif
     int ssl_handshake();
     int ssl_verify(int allow_self_signed);
 #endif
@@ -160,7 +174,7 @@ class Stream {
         }
     }
     ~Stream();
-    static int recv_blocking(Socket *sock, void *__buf, size_t __len);
+    static ssize_t recv_blocking(Socket *sock, void *__buf, size_t __len);
     static void set_protocol(Protocol *protocol);
 
   private:
@@ -185,12 +199,22 @@ class SyncClient {
         if (connected || !created) {
             return false;
         }
-        if (client.connect(&client, host, port, timeout, 0) < 0) {
+        if (client.connect(&client, host, port, timeout, client.socket->is_dgram()) < 0) {
             return false;
         }
         connected = true;
         return true;
     }
+
+#ifdef SW_USE_OPENSSL
+    bool enable_ssl_encrypt() {
+        if (client.enable_ssl_encrypt() < 0 || client.ssl_handshake() < 0) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+#endif
 
     ssize_t send(const std::string &data) {
         return client.send(&client, data.c_str(), data.length(), 0);
@@ -225,7 +249,7 @@ class AsyncClient : public SyncClient {
     std::function<void(AsyncClient *)> _onConnect = nullptr;
     std::function<void(AsyncClient *)> _onError = nullptr;
     std::function<void(AsyncClient *)> _onClose = nullptr;
-    std::function<void(AsyncClient *, const char *data, uint32_t length)> _onReceive = nullptr;
+    std::function<void(AsyncClient *, const char *data, size_t length)> _onReceive = nullptr;
 
   public:
     AsyncClient(enum swSocket_type _type) : SyncClient(_type, true) {}
@@ -244,7 +268,7 @@ class AsyncClient : public SyncClient {
             AsyncClient *ac = (AsyncClient *) cli->object;
             ac->_onClose(ac);
         };
-        client.onReceive = [](Client *cli, const char *data, uint32_t length) {
+        client.onReceive = [](Client *cli, const char *data, size_t length) {
             AsyncClient *ac = (AsyncClient *) cli->object;
             ac->_onReceive(ac, data, length);
         };

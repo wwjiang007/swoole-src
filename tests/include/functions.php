@@ -19,6 +19,10 @@ function clear_php()
     `ps -A | grep php | grep -v phpstorm | grep -v 'run-tests' | awk '{print $1}' | xargs kill -9 > /dev/null 2>&1`;
 }
 
+function puts($msg) {
+    echo $msg."\n";
+}
+
 function top(int $pid)
 {
     static $available;
@@ -761,4 +765,13 @@ function dump_to_file($file, $data)
         fwrite($fp, $l . "\n");
     }
     fclose($fp);
+}
+
+function curl_type_assert($ch, $resource_type, $class_type)
+{
+    if (PHP_VERSION_ID >= 80000) {
+        Assert::isInstanceOf($ch, $class_type);
+    } else {
+        Assert::eq(get_resource_type($ch), $resource_type);
+    }
 }

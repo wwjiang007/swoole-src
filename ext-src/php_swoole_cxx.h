@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "php_swoole.h"
+#include "php_swoole_private.h"
 #include "php_swoole_coroutine.h"
 #include "swoole_util.h"
 
@@ -92,11 +92,27 @@ SW_API bool php_swoole_socket_set_ssl(swoole::coroutine::Socket *sock, zval *zse
 SW_API bool php_swoole_socket_set_protocol(swoole::coroutine::Socket *sock, zval *zset);
 SW_API bool php_swoole_client_set(swoole::coroutine::Socket *cli, zval *zset);
 SW_API php_stream *php_swoole_create_stream_from_socket(php_socket_t _fd, int domain, int type, int protocol STREAMS_DC);
+SW_API php_stream_ops *php_swoole_get_ori_php_stream_stdio_ops();
 SW_API void php_swoole_register_rshutdown_callback(swoole::Callback cb, void *private_data);
 
 // timer
 SW_API bool php_swoole_timer_clear(swoole::TimerNode *tnode);
 SW_API bool php_swoole_timer_clear_all();
+
+static inline bool php_swoole_is_fatal_error() {
+    if (PG(last_error_message)) {
+        switch (PG(last_error_type)) {
+        case E_ERROR:
+        case E_CORE_ERROR:
+        case E_USER_ERROR:
+        case E_COMPILE_ERROR:
+            return true;
+        default:
+            break;
+        }
+    }
+    return false;
+}
 
 ssize_t php_swoole_length_func(swoole::Protocol *protocol, swoole::network::Socket *_socket, const char *data, uint32_t length);
 
@@ -401,13 +417,24 @@ struct Function {
     }
 };
 
-bool include(const std::string &file);
 bool eval(const std::string &code, const std::string &filename = "");
 void known_strings_init(void);
 void known_strings_dtor(void);
 void unserialize(zval *return_value, const char *buf, size_t buf_len, HashTable *options);
+#ifdef SW_USE_JSON
 void json_decode(zval *return_value, const char *str, size_t str_len, zend_long options, zend_long zend_long);
-zend_string *fetch_zend_string_by_val(char *val);
+#endif
+
+static inline zend_string *fetch_zend_string_by_val(void *val) {
+    return (zend_string *) ((char *) val - XtOffsetOf(zend_string, val));
+}
+
+static inline void assign_zend_string_by_val(zval *zdata, char *addr, size_t length) {
+    zend_string *zstr = fetch_zend_string_by_val(addr);
+    addr[length] = 0;
+    zstr->len = length;
+    ZVAL_STR(zdata, zstr);
+}
 
 #if PHP_VERSION_ID < 80000
 #define ZEND_STR_CONST
@@ -417,3 +444,5 @@ zend_string *fetch_zend_string_by_val(char *val);
 
 //-----------------------------------namespace end--------------------------------------------
 }  // namespace zend
+
+

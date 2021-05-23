@@ -69,7 +69,7 @@ class Socket {
     bool cancel(const enum swEvent_type event);
     bool close();
 
-    inline bool is_connect() {
+    inline bool is_connected() {
         return connected && !closed;
     }
 
@@ -93,6 +93,7 @@ class Socket {
     ssize_t recv_all(void *__buf, size_t __n);
     ssize_t send_all(const void *__buf, size_t __n);
     ssize_t recv_packet(double timeout = 0);
+    ssize_t recv_line(void *__buf, size_t maxlen);
     ssize_t recv_with_buffer(void *__buf, size_t __n);
 
     inline char *pop_packet() {
@@ -192,8 +193,6 @@ class Socket {
         return socket->info.get_port();
     }
 
-
-
     inline bool has_bound(const enum swEvent_type event = SW_EVENT_RDWR) {
         return get_bound_co(event) != nullptr;
     }
@@ -290,9 +289,11 @@ class Socket {
             return connect_timeout;
         } else if (type == TIMEOUT_READ) {
             return read_timeout;
-        } else  // if (type == TIMEOUT_WRITE)
-        {
+        } else if (type == TIMEOUT_WRITE) {
             return write_timeout;
+        } else {
+            assert(0);
+            return -1;
         }
     }
 
@@ -432,6 +433,14 @@ class Socket {
     inline bool init_sock();
     bool init_reactor_socket(int fd);
 
+    void check_return_value(ssize_t retval) {
+        if (retval >= 0) {
+            set_err(0);
+        } else if (errCode == 0) {
+            set_err(errno);
+        }
+    }
+
     inline void init_options() {
         if (type == SW_SOCK_TCP || type == SW_SOCK_TCP6) {
             set_option(IPPROTO_TCP, TCP_NODELAY, 1);
@@ -473,10 +482,8 @@ class Socket {
                 if (timeout > 0) {
                     *timer_pp = swoole_timer_add((long) (timeout * 1000), false, callback, socket_);
                     return *timer_pp != nullptr;
-                } else  // if (timeout < 0)
-                {
-                    *timer_pp = (TimerNode *) -1;
                 }
+                *timer_pp = (TimerNode *) -1;
             }
             return true;
         }

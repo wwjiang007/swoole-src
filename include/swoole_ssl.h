@@ -38,6 +38,10 @@
 #define SW_SUPPORT_DTLS
 #endif
 
+#if defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x3000000fL
+#undef SW_SUPPORT_DTLS
+#endif
+
 enum swSSL_create_flag {
     SW_SSL_SERVER = 1,
     SW_SSL_CLIENT = 2,
@@ -122,6 +126,10 @@ struct SSLContext {
         return context;
     }
 
+    bool ready() {
+        return context != nullptr;
+    }
+
     void set_protocols(uint32_t _protocols) {
         protocols = _protocols;
     }
@@ -156,6 +164,7 @@ struct SSLContext {
 
 void swSSL_init(void);
 void swSSL_init_thread_safety();
+bool swSSL_is_thread_safety();
 void swSSL_server_http_advise(swoole::SSLContext &);
 const char *swSSL_get_error();
 int swSSL_get_ex_connection_index();

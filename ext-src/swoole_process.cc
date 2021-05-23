@@ -15,10 +15,8 @@
 */
 
 #include "php_swoole_cxx.h"
-#include "php_streams.h"
-#include "php_network.h"
-
 #include "php_swoole_process.h"
+
 #include "swoole_server.h"
 #include "swoole_msg_queue.h"
 #include "swoole_signal.h"
@@ -347,7 +345,7 @@ static PHP_METHOD(swoole_process, __construct) {
         RETURN_FALSE;
     }
 
-    if (SwooleTG.aio_init) {
+    if (SwooleTG.async_threads) {
         php_swoole_fatal_error(E_ERROR, "unable to create %s with async-io threads", SW_Z_OBJCE_NAME_VAL_P(ZEND_THIS));
         RETURN_FALSE;
     }
@@ -417,24 +415,18 @@ static PHP_METHOD(swoole_process, __construct) {
 static PHP_METHOD(swoole_process, __destruct) {}
 
 static PHP_METHOD(swoole_process, wait) {
-    int status;
     zend_bool blocking = 1;
 
     if (zend_parse_parameters(ZEND_NUM_ARGS(), "|b", &blocking) == FAILURE) {
         RETURN_FALSE;
     }
 
-    int options = 0;
-    if (!blocking) {
-        options |= WNOHANG;
-    }
-
-    pid_t pid = swoole_waitpid(-1, &status, options);
-    if (pid > 0) {
+    auto exit_status = swoole::wait_process(-1, blocking ? 0 : WNOHANG);
+    if (exit_status.get_pid() > 0) {
         array_init(return_value);
-        add_assoc_long(return_value, "pid", pid);
-        add_assoc_long(return_value, "code", WEXITSTATUS(status));
-        add_assoc_long(return_value, "signal", WTERMSIG(status));
+        add_assoc_long(return_value, "pid", exit_status.get_pid());
+        add_assoc_long(return_value, "code", exit_status.get_code());
+        add_assoc_long(return_value, "signal", exit_status.get_signal());
     } else {
         RETURN_FALSE;
     }
@@ -542,10 +534,7 @@ static PHP_METHOD(swoole_process, signal) {
         RETURN_FALSE;
     }
 
-    php_swoole_check_reactor();
-
     swSignalHandler handler = swSignal_get_handler(signo);
-
     if (handler && handler != php_swoole_onSignal) {
         php_swoole_fatal_error(
             E_WARNING, "signal [" ZEND_LONG_FMT "] processor has been registered by the system", signo);
@@ -580,6 +569,18 @@ static PHP_METHOD(swoole_process, signal) {
         handler = php_swoole_onSignal;
     }
 
+    if (sw_server() && sw_server()->is_sync_process()) {
+        if (signal_fci_caches[signo]) {
+            sw_zend_fci_cache_free(signal_fci_caches[signo]);
+        } else {
+            SwooleTG.signal_listener_num++;
+        }
+        signal_fci_caches[signo] = fci_cache;
+        swSignal_set(signo, handler);
+        RETURN_TRUE;
+    }
+
+    php_swoole_check_reactor();
     // for swSignalfd_setup
     SwooleTG.reactor->check_signalfd = true;
     if (!SwooleTG.reactor->isset_exit_condition(Reactor::EXIT_CONDITION_SIGNAL_LISTENER)) {
@@ -657,7 +658,7 @@ static void php_swoole_onSignal(int signo) {
 
     if (fci_cache) {
         zval argv[1];
-        ZVAL_LONG(& argv[0], signo);
+        ZVAL_LONG(&argv[0], signo);
 
         if (UNEXPECTED(!zend::function::call(fci_cache, 1, argv, nullptr, php_swoole_is_enable_coroutine()))) {
             php_swoole_fatal_error(
@@ -792,7 +793,7 @@ static PHP_METHOD(swoole_process, read) {
 
     zend_string *buf = zend_string_alloc(buf_size, 0);
     ssize_t ret = process->pipe_current->read(buf->val, buf_size);
-    
+
     if (ret < 0) {
         efree(buf);
         if (errno != EINTR) {
