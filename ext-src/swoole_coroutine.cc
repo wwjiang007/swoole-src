@@ -335,6 +335,11 @@ void PHPCoroutine::activate() {
         }
         if (sw_likely(orig_error_function)) {
             orig_error_function(type, error_filename, error_lineno, ZEND_ERROR_CB_LAST_ARG_RELAY);
+#if PHP_VERSION_ID >= 80000
+            if (EG(exit_status) == 255) {
+                exit(EG(exit_status));
+            }
+#endif
         }
     };
 
