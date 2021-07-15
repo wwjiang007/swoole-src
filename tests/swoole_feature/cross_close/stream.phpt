@@ -34,5 +34,5 @@ READ
 CLOSE
 CLOSED
 
-Warning: fclose(): supplied resource is not a valid stream resource in %s/tests/swoole_feature/cross_close/stream.php on line 18
+Warning: fclose(): supplied resource is not a valid stream resource in %s/tests/swoole_feature/cross_close/stream.php on line %d
 DONE
