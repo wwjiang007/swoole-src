@@ -37,6 +37,7 @@ SW_EXTERN_C_BEGIN
 #if PHP_VERSION_ID >= 80000
 /* CurlMultiHandle class */
 
+extern zend_class_entry *curl_multi_ce;
 zend_class_entry *swoole_coroutine_curl_multi_handle_ce;
 
 static inline php_curlm *curl_multi_from_obj(zend_object *obj) {
@@ -699,6 +700,7 @@ void curl_multi_register_class(const zend_function_entry *method_entries) {
     SW_SET_CLASS_CUSTOM_OBJECT(
         swoole_coroutine_curl_multi_handle, curl_multi_create_object, curl_multi_free_obj, php_curlm, std);
     swoole_coroutine_curl_multi_handle_ce->ce_flags |= ZEND_ACC_FINAL | ZEND_ACC_NO_DYNAMIC_PROPERTIES;
+    swoole_coroutine_curl_multi_handle_ce->parent = curl_multi_ce;
     swoole_coroutine_curl_multi_handle_handlers.get_gc = curl_multi_get_gc;
     swoole_coroutine_curl_multi_handle_handlers.get_constructor = curl_multi_get_constructor;
     swoole_coroutine_curl_multi_handle_handlers.clone_obj = NULL;

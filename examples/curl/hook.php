@@ -1,7 +1,7 @@
 <?php
 Co::set(['hook_flags' => SWOOLE_HOOK_ALL | SWOOLE_HOOK_NATIVE_CURL, ]);
 //Co::set(['hook_flags' => SWOOLE_HOOK_ALL, ]);
-
+$n = empty($argv[1]) ? 3 : intval($argv[1]);
 Co\run(function () {
     $n = 3;
     while($n--) {
